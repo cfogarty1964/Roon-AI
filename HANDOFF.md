@@ -492,10 +492,85 @@ Added a full hierarchical Roon library browser page. Navigate by genre, artist, 
 **How browse navigation works:**
 - `POST /roon/browse { pop_all: true }` → root (Library, TIDAL, Qobuz, History…)
 - `POST /roon/browse { item_key, session_key }` → drill into item
+- `POST /roon/browse { item_key, zone_id, session_key }` → execute a browse **action** item (Shuffle, Start Radio, Play Now) on a zone
 - `POST /roon/browse { pop_levels: 1, session_key }` → back one level
 - `POST /roon/browse/load { session_key, offset, count }` → paginate current level
-- `POST /roon/play_item { item_key, zone_id, action }` → play selected item
+
+**Critical: action items vs list items**
+
+Roon browse items carry a `hint` field:
+- `"list"` / `"action_list"` → has children, navigate with `POST /roon/browse { item_key, session_key }`
+- `"action"` → leaf action (Shuffle, Start Radio, Play Now, etc.) — execute with `POST /roon/browse { item_key, zone_id, session_key }`. **Never use `/roon/play_item` for these** — it returns 200 OK but does nothing. The `zone_id` is mandatory so Roon knows which zone to act on.
+- `"header"` → non-interactive section label
+
+After calling browse on an action item, check `result.action`:
+- `"list"` → Roon returned a sub-menu; update state and display it
+- `"message"` / `"none"` → action executed; show `result.message` as feedback, leave list unchanged
+
+### Library Browser — Alphabet Filter + Grid Layout
+
+Upgraded the Library page with two major UX improvements for large lists (artists, composers, genres with ≥ 26 items):
+
+**A–Z alphabet selector bar**
+- Appears above the list whenever `list_count >= 26`
+- Letters with loaded items are clickable; letters with no items are dimmed
+- Clicking a letter filters to items starting with that letter; clicking again or "All" clears it
+- `#` catches items that don't start with a letter
+- Letter filter resets automatically when navigating (Back or item click)
+
+**Multi-column responsive grid**
+- Large lists switch from the single-column row layout to a `grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5` grid
+- Each cell: small thumbnail (or first-letter initial as fallback) + name
+- Small lists (< 26 items) keep the original row layout unchanged
+
+**Background auto-load**
+- When entering a large list, all items are fetched in 100-item batches in the background
+- Subtle "Indexing N of M…" pulse shown in the nav bar while loading
+- Once complete, the full alphabet is filterable with no manual "Load more" needed
+- `loading_all: bool` flag in `LibraryState` prevents duplicate load loops
+
+**Key implementation notes:**
+- `is_large_list = list_count >= ALPHA_THRESHOLD (26)` drives both the grid and alpha bar
+- `do_action_item()` replaces `do_play_item()` for `hint == "action"` items — routes through `/roon/browse` with `zone_id`
+- `load_all_remaining()` async loop fetches until `items.len() >= list_count`, then sets `loading_all = false`
+- `do_browse()` resets `loading_all = false` on every navigation so the auto-load re-triggers for each new large list
+
+### Windows Build Sequence (Critical)
+
+**Always run both steps — not just `dx build`:**
+
+```bash
+dx build --release --platform web --features web   # builds WASM + dx-path binary
+cargo build --release --features server            # embeds WASM into target/release/ binary
+```
+
+`dx build` puts its server binary at `target\dx\unified-hifi-control\release\web\unified-hifi-control.exe`.  
+The binary you actually *run* (`.\target\release\unified-hifi-control.exe`) is only updated by `cargo build`.  
+Running only `dx build` leaves the old binary in place — UI changes will appear absent.
+
+**Kill running process (PowerShell):**
+```powershell
+Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+```
+(The Git Bash `taskkill //F` syntax does not work in PowerShell; use the above.)
+
+### Personal Fork
+
+A personal fork has been pushed to **https://github.com/cfogarty1964/unified-hifi-control** (branch: `v3`).  
+Remote name locally: `cfogarty`. Push personal changes with:
+```bash
+git push cfogarty v3
+```
 
 ---
 
-*Generated: 2026-04-17*
+## Known Gaps / Next Steps (updated 2026-04-17)
+
+- **Library page submenu**: When browsing to an album/track, action_list items (Play Now / Add to Queue / Start Radio) currently navigate into the submenu — a one-tap play shortcut could be added
+- **Roon API fork**: Waiting for SO_REUSEADDR fix to merge upstream; then switch back to official crate
+- **MCP auth**: No authentication on `/mcp` endpoint — assumes trusted LAN
+- **E2E tests**: Playwright config exists in `e2e/` but coverage is limited
+
+---
+
+*Updated: 2026-04-17*
