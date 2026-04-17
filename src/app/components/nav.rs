@@ -70,6 +70,7 @@ pub fn Nav(props: NavProps) -> Element {
                 // Desktop navigation - use Link for client-side routing (no page reload)
                 div { class: "hidden lg:flex items-center space-x-4",
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, "Zones" }
+                    Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
                     if !hide_hqp {
                         Link { class: nav_link_class("hqplayer"), to: Route::HqPlayer {}, "HQPlayer" }
                     }
@@ -108,6 +109,7 @@ pub fn Nav(props: NavProps) -> Element {
             div { class: "{mobile_menu_class}", id: "mobile-menu",
                 div { class: "px-2 pt-2 pb-3 space-y-1",
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, onclick: move |_| menu_open.set(false), "Zones" }
+                    Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
                     if !hide_hqp {
                         Link { class: nav_link_class("hqplayer"), to: Route::HqPlayer {}, onclick: move |_| menu_open.set(false), "HQPlayer" }
                     }

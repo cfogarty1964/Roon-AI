@@ -4,12 +4,14 @@
 
 mod hqplayer;
 mod knobs;
+mod library;
 mod lms;
 mod settings;
 mod zones;
 
 pub use hqplayer::HqPlayer;
 pub use knobs::Knobs;
+pub use library::Library;
 pub use lms::Lms;
 pub use settings::Settings;
 pub use zones::Zones;

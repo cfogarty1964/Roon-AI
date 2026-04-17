@@ -568,6 +568,9 @@ pub struct BrowseRequest {
     pub zone_id: Option<String>,
     #[serde(default)]
     pub pop_all: bool,
+    /// Pop N levels back in the browse stack (for back navigation)
+    #[serde(default)]
+    pub pop_levels: Option<u32>,
     #[serde(default)]
     pub input: Option<String>,
     /// Session key for maintaining browse state across requests
@@ -638,6 +641,7 @@ pub async fn roon_browse_handler(
         item_key: req.item_key,
         zone_or_output_id: req.zone_id,
         pop_all: req.pop_all,
+        pop_levels: req.pop_levels,
         input: req.input,
         multi_session_key: Some(session_key.clone()),
         ..Default::default()
@@ -735,6 +739,74 @@ pub async fn roon_browse_status_handler(State(state): State<AppState>) -> impl I
     Json(serde_json::json!({
         "connected": connected
     }))
+}
+
+/// Load request body for paginating an existing browse session
+#[derive(Deserialize)]
+pub struct BrowseLoadRequest {
+    pub session_key: String,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub count: Option<usize>,
+}
+
+/// POST /roon/browse/load - Load more items from an existing browse session
+pub async fn roon_browse_load_handler(
+    State(state): State<AppState>,
+    Json(req): Json<BrowseLoadRequest>,
+) -> impl IntoResponse {
+    use roon_api::browse::{ItemHint, LoadOpts};
+
+    if !state.roon.is_browse_connected().await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "Roon Browse not connected".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let load_opts = LoadOpts {
+        multi_session_key: Some(req.session_key.clone()),
+        offset: req.offset,
+        count: req.count.or(Some(50)),
+        ..Default::default()
+    };
+
+    match state.roon.load(load_opts).await {
+        Ok(load_result) => {
+            let items: Vec<BrowseItemResponse> = load_result
+                .items
+                .into_iter()
+                .map(|item| {
+                    let hint_str = item.hint.map(|h| match h {
+                        ItemHint::Action => "action",
+                        ItemHint::ActionList => "action_list",
+                        ItemHint::List => "list",
+                        ItemHint::Header => "header",
+                        ItemHint::None => "none",
+                    });
+                    BrowseItemResponse {
+                        title: item.title,
+                        subtitle: item.subtitle,
+                        item_key: item.item_key,
+                        hint: hint_str.map(|s| s.to_string()),
+                        image_key: item.image_key,
+                    }
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({ "items": items }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 // =============================================================================

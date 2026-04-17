@@ -13,7 +13,7 @@ pub mod settings_context;
 pub mod sse;
 pub mod theme;
 
-use pages::{HqPlayer, Knobs, Lms, Settings, Zones};
+use pages::{HqPlayer, Knobs, Library, Lms, Settings, Zones};
 use settings_context::use_settings_provider;
 use sse::use_sse_provider;
 use theme::use_theme_provider;
@@ -40,6 +40,8 @@ pub fn App() -> Element {
 pub enum Route {
     #[route("/")]
     Zones {},
+    #[route("/library")]
+    Library {},
     #[route("/hqplayer")]
     HqPlayer {},
     #[route("/lms")]

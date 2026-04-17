@@ -284,6 +284,7 @@ mod server {
             .route("/roon/play", post(api::roon_play_handler))
             .route("/roon/play_item", post(api::roon_play_item_handler))
             .route("/roon/browse", post(api::roon_browse_handler))
+            .route("/roon/browse/load", post(api::roon_browse_load_handler))
             .route("/roon/browse/status", get(api::roon_browse_status_handler))
             // HQPlayer routes
             .route("/hqplayer/status", get(api::hqp_status_handler))

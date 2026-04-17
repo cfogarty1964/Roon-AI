@@ -298,6 +298,43 @@ pub struct FetchFirmwareResponse {
 }
 
 // =============================================================================
+// Roon Browse Types
+// =============================================================================
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BrowseItem {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub item_key: Option<String>,
+    pub hint: Option<String>,
+    pub image_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BrowseListInfo {
+    pub title: String,
+    pub count: u32,
+    pub level: u32,
+    pub subtitle: Option<String>,
+    pub image_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BrowseResult {
+    pub action: String,
+    pub list: Option<BrowseListInfo>,
+    pub session_key: String,
+    pub items: Vec<BrowseItem>,
+    pub is_error: Option<bool>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct BrowseLoadResult {
+    pub items: Vec<BrowseItem>,
+}
+
+// =============================================================================
 // Client-side fetch helpers (for use in effects/resources)
 // =============================================================================
 
