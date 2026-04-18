@@ -16,10 +16,26 @@ pub struct Config {
 
     #[serde(default)]
     pub lms: Option<LmsConfig>,
+
+    #[serde(default)]
+    pub ai: Option<AiConfig>,
 }
 
 fn default_port() -> u16 {
     8088
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AiConfig {
+    /// Anthropic API key — also read from ANTHROPIC_API_KEY env var
+    pub api_key: Option<String>,
+}
+
+/// Resolve the Anthropic API key: env var takes precedence over TOML
+pub fn resolve_anthropic_api_key(config: &Config) -> Option<String> {
+    std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .or_else(|| config.ai.as_ref().and_then(|a| a.api_key.clone()))
 }
 
 #[derive(Debug, Default, Deserialize)]

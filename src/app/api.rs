@@ -452,3 +452,29 @@ pub async fn post_json_no_response<T: Serialize>(url: &str, body: &T) -> Result<
 pub async fn post_json_no_response<T: Serialize>(_url: &str, _body: &T) -> Result<(), String> {
     Err("post_json_no_response is only available in browser".to_string())
 }
+
+// =============================================================================
+// AI Chat Types
+// =============================================================================
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AiChatRequest {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zone_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AiChatResponse {
+    #[serde(default)]
+    pub response: String,
+    #[serde(default)]
+    pub actions: Vec<String>,
+    /// Set when the server returns an error JSON
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub async fn ai_chat(req: AiChatRequest) -> Result<AiChatResponse, String> {
+    post_json("/api/ai/chat", &req).await
+}

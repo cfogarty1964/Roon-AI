@@ -490,10 +490,10 @@ Added a full hierarchical Roon library browser page. Navigate by genre, artist, 
 **Dioxus closure-in-for-loop pitfall**: Do not pass an `impl FnMut + 'static` closure to a helper called inside an `rsx!` for loop. The closure is moved on the first iteration, causing a runtime panic on the second item. Fix: inline all rendering logic inside the `for` loop and capture per-item clones of signals/values as local `let` bindings *before* the `rsx!` block. This is how `library.rs` is structured.
 
 **How browse navigation works:**
-- `POST /roon/browse { pop_all: true }` → root (Library, TIDAL, Qobuz, History…)
-- `POST /roon/browse { item_key, session_key }` → drill into item
+- `POST /roon/browse { pop_all: true, zone_id }` → root (Library, TIDAL, Qobuz, History…)
+- `POST /roon/browse { item_key, zone_id, session_key }` → drill into item
 - `POST /roon/browse { item_key, zone_id, session_key }` → execute a browse **action** item (Shuffle, Start Radio, Play Now) on a zone
-- `POST /roon/browse { pop_levels: 1, session_key }` → back one level
+- `POST /roon/browse { pop_levels: 1, zone_id, session_key }` → back one level
 - `POST /roon/browse/load { session_key, offset, count }` → paginate current level
 
 **Critical: action items vs list items**
@@ -564,13 +564,342 @@ git push cfogarty v3
 
 ---
 
-## Known Gaps / Next Steps (updated 2026-04-17)
+## Recent Work (2026-04-18)
 
-- **Library page submenu**: When browsing to an album/track, action_list items (Play Now / Add to Queue / Start Radio) currently navigate into the submenu — a one-tap play shortcut could be added
+### Library Browser — Playback Fix
+
+**Problem**: Clicking "Play Now" / "Add Next" / etc. inside the "Play Album" submenu showed a "Playing" confirmation but music did not start on the selected zone.
+
+**Root cause**: Roon's browse API requires `zone_or_output_id` to be provided consistently throughout the browse session — not just at the final action step. The library page was only passing `zone_id` when executing an action item (`hint == "action"`), while all navigation steps (root browse, item drill-down, Back) used `zone_id: None`. This meant Roon had no zone context for the session and silently ignored the playback request.
+
+**Fix** (`src/app/pages/library.rs`): `zone_id` (from the "Play to" zone picker) is now threaded into every `do_browse` call — root, item navigation, and Back — matching how `search_and_play` in the Roon adapter works.
+
+**Key rule**: Always include `zone_or_output_id` on every step of a browse session that is intended to end in playback. Providing it only at the action step is insufficient.
+
+### Library Browser — Stale Background Load Error
+
+**Problem**: After navigating from a large list (e.g., Artists, 200+ items) into a sub-item, the error panel showed `JsValue(TypeError: Failed to fetch ...)` even though the correct items were displayed.
+
+**Root cause**: The background auto-load task (`load_all_remaining`) that was fetching the large list in 100-item batches continued running after the user navigated away. When its next `/roon/browse/load` request failed (the old session key was no longer current), it wrote the error to the shared `LibraryState`, poisoning the new level's display.
+
+**Fix** (`src/app/pages/library.rs`): `load_all_remaining` now checks the session key at the top of every loop iteration and before writing results. If the session has changed (user navigated away), the task exits silently without setting an error.
+
+---
+
+## Known Gaps / Next Steps (updated 2026-04-18)
+
+- **One-tap play shortcut**: From an album/artist view, you still need two clicks (e.g. "Play Album" → "Play Now"). A direct ▶ button on each row could collapse this to one tap.
 - **Roon API fork**: Waiting for SO_REUSEADDR fix to merge upstream; then switch back to official crate
 - **MCP auth**: No authentication on `/mcp` endpoint — assumes trusted LAN
 - **E2E tests**: Playwright config exists in `e2e/` but coverage is limited
 
 ---
 
-*Updated: 2026-04-17*
+## AI Natural Language Music Control — Implementation Plan (2026-04-18) ✅ COMPLETE
+
+### Goal
+
+A chat interface embedded in the web UI where the user can type queries like:
+
+> "I love the Adagietto from Mahler's 5th — play me similar pieces"  
+> "Queue some late-night jazz piano on the Living Room zone"  
+> "What's playing right now on all zones?"
+
+The system interprets the query using the Claude API (Anthropic), calls the appropriate adapter methods, and replies in natural language confirming what it did.
+
+### Architecture Overview
+
+```
+Browser (chat UI)
+  POST /api/ai/chat { message, zone_id }
+        │
+  src/ai/mod.rs  ──── Anthropic API (claude-sonnet-4-6)
+        │               tool_use loop:
+        │                 list_zones → aggregator.get_zones()
+        │                 search     → roon/lms .search()
+        │                 play       → roon/lms .search_and_play()
+        │                 control    → roon/lms .control()
+        │
+  Returns { response: String, actions: Vec<String> }
+```
+
+Key design decisions:
+- **No new crate deps**: `reqwest` (already a dep) hits the Anthropic API directly as JSON
+- **Reuses existing adapter logic**: the AI module calls the same Rust functions the MCP server calls — no duplication
+- **API key**: `ANTHROPIC_API_KEY` env var (or `unified-hifi-control.toml`)
+- **Model**: `claude-sonnet-4-6` (fast, capable, cost-effective for tool use)
+- **Response**: synchronous JSON (no streaming in v1); UI shows a loading spinner
+
+### Step-by-Step Implementation Plan
+
+#### Step 1 — API key config
+
+- Add `ANTHROPIC_API_KEY` env var lookup to `src/config/mod.rs` (or read directly in the AI module via `std::env`)
+- Add optional `[ai]` section to `unified-hifi-control.toml` schema: `api_key = "sk-ant-…"`
+- Key resolution order: env var → TOML → error at call time (not startup)
+- No changes to existing adapters or AppState yet
+
+#### Step 2 — AI module skeleton (`src/ai/mod.rs`)
+
+- Create `src/ai/mod.rs` (server-only, behind `#[cfg(feature = "server")]`)
+- Define `AiChatRequest { message: String, zone_id: Option<String> }`
+- Define `AiChatResponse { response: String, actions: Vec<String> }`
+- Define `AnthropicClient` struct with `api_key: String` and `reqwest::Client`
+- Implement `call_claude(messages, tools) -> Result<ClaudeResponse>` — single HTTP call to `https://api.anthropic.com/v1/messages`
+- No tool dispatch yet — just get a raw text reply working end-to-end
+
+#### Step 3 — Tool definitions
+
+- Define the 4 Claude tools as `serde_json::Value` constants in `src/ai/mod.rs`:
+  - `list_zones` — no params, returns zone list
+  - `search_music` — `{ query, zone_id?, source? }` — search library/TIDAL/Qobuz
+  - `play_music` — `{ query, zone_id, source?, action? }` — search + play/queue/radio
+  - `control_playback` — `{ zone_id, action, value? }` — play/pause/next/prev/volume
+- Pass these in every `call_claude()` request
+- Confirm Claude correctly returns `tool_use` stop reason in test
+
+#### Step 4 — Tool dispatch
+
+- Implement `execute_tool(name, input, state: &AppState) -> String` in `src/ai/mod.rs`
+- Wire each tool to existing AppState methods:
+  - `list_zones` → `state.aggregator.get_zones().await`
+  - `search_music` → `state.roon.search()` / `state.lms.search()`
+  - `play_music` → `state.roon.search_and_play()` / `state.lms.search_and_play()`
+  - `control_playback` → `state.roon.control()` / `state.lms.control()`
+- Route by zone_id prefix (`roon:`, `lms:`) exactly as MCP server does
+
+#### Step 5 — Agentic loop
+
+- Implement `run_agent(request, state) -> AiChatResponse` in `src/ai/mod.rs`:
+  1. Build initial `messages` vec with system prompt + user message
+  2. Call `call_claude(messages, tools)` 
+  3. If response contains `tool_use` blocks: execute each tool, append `tool_result` blocks to messages, loop
+  4. When stop reason is `end_turn` (text reply): return `AiChatResponse`
+- System prompt: brief context ("You control a hi-fi audio system. Use the provided tools to fulfil music requests. Always confirm what you played and on which zone.")
+- Cap loop at 10 iterations to prevent runaway tool chains
+
+#### Step 6 — Axum route `POST /api/ai/chat`
+
+- Add `AiChat` handler in `src/api/mod.rs` (or new `src/api/ai.rs`)
+- Extract `AppState`, deserialise `AiChatRequest`, call `run_agent`, return JSON `AiChatResponse`
+- Register route in `src/main.rs`: `.route("/api/ai/chat", post(ai_chat_handler))`
+- Test with `curl -X POST http://localhost:8088/api/ai/chat -H 'Content-Type: application/json' -d '{"message":"what zones are available?"}'`
+
+#### Step 7 — Client-side types (`src/app/api.rs`)
+
+- Add `AiChatRequest` and `AiChatResponse` structs (shared, visible to WASM)
+- Add `async fn ai_chat(req: AiChatRequest) -> Result<AiChatResponse, String>` fetch helper
+- Uses existing `post_json` / `fetch` pattern already in `src/app/api.rs`
+
+#### Step 8 — UI page (`src/app/pages/ai_chat.rs`)
+
+- New Dioxus page component `AiChat`
+- **Zone picker**: dropdown populated from `GET /api/zones` (same as Library page), default to first zone
+- **Chat history**: `Vec<ChatMessage { role, content }>` in a signal; scrollable div
+- **Input bar**: text input + Send button; disabled while awaiting response
+- **Loading state**: spinner/pulse while request is in-flight
+- **Message bubbles**: user messages right-aligned, assistant left-aligned; assistant replies render action confirmation in a subtle secondary colour
+- Export from `src/app/pages/mod.rs`
+
+#### Step 9 — Route + nav wire-up
+
+- Add `Route::AiChat` to `src/app/mod.rs` routing enum
+- Map to `/ai` path
+- Add "AI" nav link in `src/app/components/nav.rs` (desktop sidebar + mobile bottom bar), after Library
+- Rebuild Tailwind CSS (new classes from chat UI)
+
+#### Step 10 — Build, test, iterate
+
+Full build sequence:
+```bash
+mkdir -p tmp_css
+./tailwindcss.exe -i src/input.css -o tmp_css/tailwind.css --content "src/app/**/*.rs"
+mv tmp_css/tailwind.css public/tailwind.css
+rmdir tmp_css
+dx build --release --platform web --features web
+cargo build --release --features server
+```
+
+Test checklist:
+- [ ] "What zones are available?" → lists zones by name
+- [ ] "Play the Adagietto from Mahler's 5th on [zone]" → searches + plays, confirms
+- [ ] "Play something like that" (follow-up) → context from prior turn if messages kept
+- [ ] "Pause the Living Room" → control_playback executed
+- [ ] Missing API key → helpful error message in UI, not a server panic
+- [ ] No Roon connection → graceful error in chat, not a 500
+
+### Files to Create / Modify
+
+| File | Change |
+|---|---|
+| `src/ai/mod.rs` | **New** — Anthropic client, tool defs, tool dispatch, agentic loop |
+| `src/api/mod.rs` | Add `POST /api/ai/chat` handler |
+| `src/main.rs` | Register `/api/ai/chat` route |
+| `src/app/api.rs` | Add `AiChatRequest`, `AiChatResponse`, `ai_chat()` fetch fn |
+| `src/app/pages/ai_chat.rs` | **New** — chat UI page |
+| `src/app/pages/mod.rs` | Export `AiChat` |
+| `src/app/mod.rs` | Add `/ai` route |
+| `src/app/components/nav.rs` | Add AI nav link |
+| `src/config/mod.rs` | Add `ANTHROPIC_API_KEY` / `[ai]` section support |
+| `Cargo.toml` | No new deps required |
+
+### Key Env Var
+
+```
+ANTHROPIC_API_KEY=sk-ant-…
+```
+
+Set before running:
+```powershell
+$env:ANTHROPIC_API_KEY="sk-ant-…"
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+---
+
+## Recent Work (2026-04-18) — AI Natural Language Music Control
+
+### What was built
+
+A full AI chat interface backed by the Claude API (Anthropic), embedded in the web UI at `/ai`.
+
+The user types free-text music requests — e.g. *"I love the Adagietto from Mahler's 5th, play similar pieces"* — and the system interprets the query, calls the appropriate adapter methods, and replies in natural language confirming what it did. A zone picker lets the user direct playback to any active zone.
+
+### Architecture
+
+```
+Browser (/ai page)
+  POST /api/ai/chat { message, zone_id }
+        │
+  src/ai/mod.rs  ──── Anthropic API (claude-sonnet-4-6)
+        │               agentic tool-use loop (max 10 turns):
+        │                 list_zones    → aggregator.get_zones()
+        │                 search_music  → roon/lms .search()
+        │                 play_music    → roon/lms .search_and_play()
+        │                 control_playback → roon/lms/openhome/upnp .control()
+        │
+  Returns { response: String, actions: Vec<String> }
+```
+
+### Key design decisions
+
+- **No new crate deps** — `reqwest` (already a dep) hits `https://api.anthropic.com/v1/messages` directly as JSON
+- **`play_music` with `action='radio'`** seeds Roon Radio from the matched track — this is how "play similar to X" works
+- **API key resolution** — env var `ANTHROPIC_API_KEY` takes precedence over `[ai] api_key` in TOML
+- **Graceful degradation** — if the key is missing, the server starts normally and the AI page shows an error message; no crash
+- **Model** — `claude-sonnet-4-6`
+
+### How to enable
+
+**Option A — Config file (recommended, persists across restarts)**
+
+The config file lives at `%APPDATA%\unified-hifi-control\config.toml` (Windows).  
+Full path: `C:\Users\ChrisFogarty\AppData\Roaming\unified-hifi-control\config.toml`
+
+The file already exists. Open it and set your key:
+
+```toml
+port = 8088
+
+[ai]
+api_key = "sk-ant-..."
+```
+
+Get your key from https://console.anthropic.com/settings/keys. Then stop and restart the binary:
+
+```powershell
+Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+**Option B — Environment variable (current session only)**
+
+```powershell
+$env:ANTHROPIC_API_KEY="sk-ant-..."
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+On startup the server logs either:
+- `AI chat enabled (Anthropic API key found)` — ready
+- `AI chat disabled (set ANTHROPIC_API_KEY to enable)` — key missing
+
+### Files created / modified
+
+| File | Change |
+|---|---|
+| `src/ai/mod.rs` | **New** — Anthropic client, 4 tool defs, tool dispatch, agentic loop |
+| `src/api/mod.rs` | Added `AppState.anthropic_api_key`, `ai_chat_handler` |
+| `src/main.rs` | Resolves API key at startup, registers `POST /api/ai/chat` |
+| `src/app/api.rs` | Added `AiChatRequest`, `AiChatResponse`, `ai_chat()` fetch helper |
+| `src/app/pages/ai_chat.rs` | **New** — chat UI (zone picker, bubbles, loading state) |
+| `src/app/pages/mod.rs` | Exports `AiChat` |
+| `src/app/mod.rs` | Added `/ai` route |
+| `src/app/components/nav.rs` | Added "AI" nav link (desktop + mobile) |
+| `src/config/mod.rs` | Added `AiConfig`, `resolve_anthropic_api_key()` |
+
+### Web UI routes (updated)
+
+| Route | Page | Purpose |
+|---|---|---|
+| `/` | Zones | All zones, now-playing, transport + volume controls |
+| `/ai` | AI Music Control | **New** — NLS chat with zone picker |
+| `/library` | Library | Browse Roon library |
+| `/hqplayer` | HQPlayer | Config, DSP pipeline |
+| `/lms` | LMS | Server config, player discovery |
+| `/knobs` | Knobs | ESP32 firmware management |
+| `/settings` | Settings | Adapter enable/disable |
+
+### Startup log confirmation
+
+On startup the server logs either:
+- `AI chat enabled (Anthropic API key found)` — ready to use
+- `AI chat disabled (set ANTHROPIC_API_KEY to enable)` — key missing; all other features unaffected
+
+### Known limitations / next steps
+
+- **No conversation memory** — each chat message is a fresh agentic session; there is no cross-turn context (e.g. "play more like that" won't reference the previous turn)
+- **Synchronous response** — the UI shows a spinner and waits; no streaming. For long tool chains this can feel slow (~3–8s)
+- **Roon-only radio** — `action='radio'` (Roon Radio) is the "similar music" mechanism; LMS zones get an error if radio is requested
+- **Search result count** — capped at 8 results per tool call; Claude picks the best match
+
+---
+
+---
+
+## Recent Work (2026-04-18) — API Key Setup & AI Chat Verified
+
+### Anthropic API key setup (Windows)
+
+The correct config file location on Windows is:
+```
+%APPDATA%\unified-hifi-control\config.toml
+C:\Users\ChrisFogarty\AppData\Roaming\unified-hifi-control\config.toml
+```
+
+Contents:
+```toml
+port = 8088
+
+[ai]
+api_key = "sk-ant-..."
+```
+
+**Note**: The `data/unified-hifi/` directory in the project root is Docker-only. The native Windows binary reads from `%APPDATA%\unified-hifi-control\` (or `UHC_CONFIG_DIR` if set).
+
+### Troubleshooting encountered
+
+- Initial key gave `credit balance too low` error despite $50 balance — cause was a "Credit grant" invoice type that may not unlock API access immediately
+- Fix: create a new API key in the Anthropic Console after verifying balance is active
+- Account is **Tier 2** with full rate limits (1K RPM, 450K TPM for all models)
+- On startup, confirm log line: `AI chat enabled (Anthropic API key found)`
+
+### AI chat verified end-to-end
+
+`/ai` page is live and confirmed working at http://localhost:8088/ai.
+
+---
+
+*Updated: 2026-04-18 — AI chat live and verified; API key setup documented with correct Windows config path*

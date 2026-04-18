@@ -49,6 +49,8 @@ pub struct AppState {
     pub shutdown: CancellationToken,
     /// Count of active SSE connections (for shutdown diagnostics)
     pub sse_connections: Arc<AtomicUsize>,
+    /// Anthropic API key for AI chat (None = feature disabled)
+    pub anthropic_api_key: Option<String>,
 }
 
 impl AppState {
@@ -85,7 +87,13 @@ impl AppState {
             start_time,
             shutdown,
             sse_connections: Arc::new(AtomicUsize::new(0)),
+            anthropic_api_key: None,
         }
+    }
+
+    pub fn with_anthropic_key(mut self, key: Option<String>) -> Self {
+        self.anthropic_api_key = key;
+        self
     }
 
     /// Get the count of active SSE connections
@@ -2244,6 +2252,23 @@ pub async fn api_settings_post_handler(
     }
 
     Json(serde_json::json!({"ok": true}))
+}
+
+// ============================================================================
+// AI chat handler
+// ============================================================================
+
+pub async fn ai_chat_handler(
+    State(state): State<AppState>,
+    Json(req): Json<crate::ai::AiChatRequest>,
+) -> impl IntoResponse {
+    match crate::ai::run_agent(req, &state).await {
+        Ok(resp) => (StatusCode::OK, Json(serde_json::to_value(resp).unwrap_or_default())),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        ),
+    }
 }
 
 #[cfg(test)]

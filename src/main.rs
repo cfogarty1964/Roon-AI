@@ -244,6 +244,14 @@ mod server {
         // Create shutdown token for graceful SSE termination (fixes #73)
         let shutdown_token = CancellationToken::new();
 
+        // Resolve Anthropic API key (env var takes precedence over TOML)
+        let anthropic_key = config::resolve_anthropic_api_key(&config);
+        if anthropic_key.is_some() {
+            tracing::info!("AI chat enabled (Anthropic API key found)");
+        } else {
+            tracing::info!("AI chat disabled (set ANTHROPIC_API_KEY to enable)");
+        }
+
         // Build application state (clone Arcs so we can access adapters for shutdown)
         let state = api::AppState::new(
             roon,
@@ -260,7 +268,8 @@ mod server {
             startable_adapters.clone(),
             Instant::now(),
             shutdown_token.clone(),
-        );
+        )
+        .with_anthropic_key(anthropic_key);
 
         // Clone state for shutdown diagnostics
         let state_for_shutdown = state.clone();
@@ -378,6 +387,8 @@ mod server {
             // App settings API
             .route("/api/settings", get(api::api_settings_get_handler))
             .route("/api/settings", post(api::api_settings_post_handler))
+            // AI chat
+            .route("/api/ai/chat", post(api::ai_chat_handler))
             // Event stream (SSE)
             .route("/events", get(api::events_handler))
             // Knob hardware API routes

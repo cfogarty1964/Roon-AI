@@ -83,19 +83,21 @@ pub fn Library() -> Element {
         }
     });
 
-    // Load library root on mount (once)
+    // Load library root on mount (once); include zone_id if already selected so Roon
+    // can associate the session with the target zone from the first browse call.
     use_effect(move || {
         let already_loaded = {
             let s = state.read();
             s.loading || s.session_key.is_some()
         };
         if !already_loaded {
+            let zone = selected_zone.read().clone();
             spawn(async move {
                 do_browse(
                     &mut state,
                     BrowseRequest {
                         item_key: None,
-                        zone_id: None,
+                        zone_id: if zone.is_empty() { None } else { Some(zone) },
                         pop_all: true,
                         pop_levels: None,
                         session_key: None,
@@ -231,12 +233,13 @@ pub fn Library() -> Element {
                         onclick: move |_| {
                             selected_letter.set(None);
                             let sess = state.read().session_key.clone();
+                            let zone = selected_zone.read().clone();
                             spawn(async move {
                                 do_browse(
                                     &mut state,
                                     BrowseRequest {
                                         item_key: None,
-                                        zone_id: None,
+                                        zone_id: if zone.is_empty() { None } else { Some(zone) },
                                         pop_all: false,
                                         pop_levels: Some(1),
                                         session_key: sess,
@@ -356,12 +359,13 @@ pub fn Library() -> Element {
                                                 selected_letter.set(None);
                                                 let sess = state.read().session_key.clone();
                                                 let key = item_key.clone();
+                                                let zone = selected_zone.read().clone();
                                                 spawn(async move {
                                                     do_browse(
                                                         &mut state,
                                                         BrowseRequest {
                                                             item_key: key,
-                                                            zone_id: None,
+                                                            zone_id: if zone.is_empty() { None } else { Some(zone) },
                                                             pop_all: false,
                                                             pop_levels: None,
                                                             session_key: sess,
@@ -435,12 +439,13 @@ pub fn Library() -> Element {
                                                 selected_letter.set(None);
                                                 let sess = state.read().session_key.clone();
                                                 let key = item_key.clone();
+                                                let zone = selected_zone.read().clone();
                                                 spawn(async move {
                                                     do_browse(
                                                         &mut state,
                                                         BrowseRequest {
                                                             item_key: key,
-                                                            zone_id: None,
+                                                            zone_id: if zone.is_empty() { None } else { Some(zone) },
                                                             pop_all: false,
                                                             pop_levels: None,
                                                             session_key: sess,
@@ -556,6 +561,12 @@ async fn do_browse(state: &mut Signal<LibraryState>, req: BrowseRequest) {
 
 async fn load_all_remaining(state: &mut Signal<LibraryState>, session_key: String, mut offset: usize) {
     loop {
+        // Bail if the user navigated away (session changed) before we started or between batches.
+        let still_current = state.read().session_key.as_deref() == Some(session_key.as_str());
+        if !still_current {
+            break;
+        }
+
         let req = BrowseLoadRequest {
             session_key: session_key.clone(),
             offset,
@@ -574,6 +585,10 @@ async fn load_all_remaining(state: &mut Signal<LibraryState>, session_key: Strin
                 }
                 offset += loaded;
                 let done = state.with_mut(|s| {
+                    // Only append if we're still on the same browse level.
+                    if s.session_key.as_deref() != Some(session_key.as_str()) {
+                        return true; // triggers break
+                    }
                     s.items.extend(result.items);
                     (s.items.len() as u32) >= s.list_count
                 });
@@ -581,13 +596,18 @@ async fn load_all_remaining(state: &mut Signal<LibraryState>, session_key: Strin
                     break;
                 }
             }
-            Err(e) => {
-                state.with_mut(|s| s.error = Some(e));
+            Err(_) => {
+                // Silently discard errors from stale background loads — the user has
+                // almost certainly navigated away and the session_key is no longer valid.
                 break;
             }
         }
     }
-    state.with_mut(|s| s.loading_all = false);
+    state.with_mut(|s| {
+        if s.session_key.as_deref() == Some(session_key.as_str()) {
+            s.loading_all = false;
+        }
+    });
 }
 
 // Execute a Roon browse "action" item (Shuffle, Start Radio, Play Now, etc.)
