@@ -10,7 +10,7 @@
 
 A source-agnostic hi-fi audio control bridge. It discovers and controls audio sources across your LAN under a single web UI and Claude AI / MCP interface.
 
-**Supported sources:** Roon · LMS/Lyrion · HQPlayer · OpenHome · UPnP/DLNA
+**Supported sources:** Roon · UPnP/DLNA
 
 ---
 
@@ -34,35 +34,34 @@ A source-agnostic hi-fi audio control bridge. It discovers and controls audio so
 │  │                   Tokio Event Bus                         │    │
 │  │   ZoneDiscovered · ZoneUpdated · ZoneRemoved             │    │
 │  │   NowPlayingChanged · Command · CommandResponse           │    │
-│  └──┬──────────┬──────────┬──────────┬──────────┬───────────┘    │
-│     │          │          │          │          │                  │
-│  ┌──▼──┐  ┌───▼──┐  ┌────▼──┐  ┌───▼────┐ ┌──▼────┐            │
-│  │Roon │  │ LMS  │  │HQPlay │  │OpenHome│ │ UPnP  │            │
-│  │     │  │      │  │  er   │  │        │ │       │            │
-│  └──┬──┘  └───┬──┘  └────┬──┘  └───┬────┘ └──┬────┘            │
-│     │SOOD     │JSON-RPC  │TCP/XML  │SSDP+    │SSDP+             │
-│     │+WS      │+TCP CLI  │+HTTP    │SOAP     │SOAP              │
-│                           │                                        │
-│  ┌────────────────────────▼─────────────────────────────────┐    │
-│  │                   ZoneAggregator                          │    │
-│  │   single source of truth: HashMap<zone_id, Zone>         │    │
-│  └────────────────────────┬─────────────────────────────────┘    │
-│                           │                                        │
-│            ┌──────────────┼──────────────┐                        │
-│         ┌──▼──┐      ┌───▼───┐      ┌───▼───┐                   │
-│         │ API │      │  SSE  │      │  MCP  │                   │
-│         │     │      │/events│      │ /mcp  │                   │
-│         └─────┘      └───────┘      └───────┘                   │
+│  └──┬──────────────────────────────────────┬────────────────┘    │
+│     │                                      │                       │
+│  ┌──▼──┐                              ┌───▼────┐                  │
+│  │Roon │                              │  UPnP  │                  │
+│  │     │                              │        │                  │
+│  └──┬──┘                              └───┬────┘                  │
+│     │SOOD+WebSocket                       │SSDP+SOAP              │
+│                                                                    │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │                   ZoneAggregator                            │  │
+│  │   single source of truth: HashMap<zone_id, Zone>           │  │
+│  └──────────────────────┬─────────────────────────────────────┘  │
+│                         │                                          │
+│          ┌──────────────┼──────────────┬──────────┐               │
+│       ┌──▼──┐      ┌───▼───┐      ┌───▼───┐  ┌───▼───┐          │
+│       │ API │      │  SSE  │      │  MCP  │  │  AI   │          │
+│       │     │      │/events│      │ /mcp  │  │ chat  │          │
+│       └─────┘      └───────┘      └───────┘  └───────┘          │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Zone ID Format
 
-All zones are identified by a prefixed string: `roon:<id>`, `lms:<id>`, `openhome:<uuid>`, `upnp:<uuid>`, `hqp:<id>`
+All zones are identified by a prefixed string: `roon:<id>` or `upnp:<uuid>`
 
 ### Real-Time Updates (SSE)
 
-The web UI subscribes to `GET /events` (Server-Sent Events). Events include `ZoneDiscovered`, `ZoneUpdated`, `NowPlayingChanged`, `VolumeChanged`, `HqpStateChanged`, etc. Any HTTP client (browser, ESP32, curl) can subscribe.
+The web UI subscribes to `GET /events` (Server-Sent Events). Events include `ZoneDiscovered`, `ZoneUpdated`, `NowPlayingChanged`, `VolumeChanged`, `RoonConnected`, `RoonDisconnected`. Any HTTP client (browser, ESP32, curl) can subscribe.
 
 ---
 
@@ -108,6 +107,29 @@ Open **http://localhost:8088**
 
 Roon SOOD discovery starts automatically. Your Roon Core appears in Zones within seconds. Authorise once in **Roon Settings → Extensions**.
 
+### Stop / Restart
+
+**PowerShell** (recommended):
+```powershell
+# Stop
+Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+
+# Start
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+**Git Bash / WSL**:
+```bash
+# Stop
+taskkill //F //IM unified-hifi-control.exe
+
+# Start
+RUST_LOG=debug ./target/release/unified-hifi-control.exe
+```
+
+> Note: the running binary locks the `.exe` file on Windows. Always stop the process before rebuilding.
+
 ### Hot Reload (UI development)
 
 ```bash
@@ -136,16 +158,11 @@ port = 8088
 [roon]
 # extension_id and display_name optional
 
-[lms]
-host = "192.168.1.x"
-port = 9000
-
-[hqplayer]
-host = "192.168.1.x"
-port = 8088
+[ai]
+api_key = "sk-ant-..."   # Anthropic API key for AI chat
 ```
 
-**State files**: `app-settings.json`, `roon_state.json`, `hqp-config.json`, `knobs.json`
+**State files**: `app-settings.json`, `roon_state.json`, `knobs.json`
 
 ---
 
@@ -154,9 +171,19 @@ port = 8088
 | Surface | How |
 |---------|-----|
 | Web UI | http://localhost:8088 |
-| Claude AI | MCP endpoint at http://localhost:8088/mcp |
-| ESP32 knob | Hardware volume/transport knob, manages via `/knobs` page |
-| iOS / Apple Watch | Alpha |
+| AI Chat | http://localhost:8088/ai — natural language music control |
+| Claude AI (MCP) | MCP endpoint at http://localhost:8088/mcp |
+| ESP32 knob | Hardware volume/transport knob, managed via `/knobs` page |
+
+### Web UI Pages
+
+| Route | Page |
+|-------|------|
+| `/` | Zones — all zones with transport + volume controls |
+| `/ai` | AI Music Control — natural language chat |
+| `/library` | Library — browse Roon library |
+| `/knobs` | Knobs — ESP32 firmware management |
+| `/settings` | Settings — adapter enable/disable |
 
 ### Claude AI / MCP Tools
 
@@ -172,7 +199,7 @@ Add to `.mcp.json`:
 }
 ```
 
-Available tools: `hifi_zones` · `hifi_now_playing` · `hifi_control` · `hifi_search` · `hifi_play` · `hifi_status` · `hifi_hqplayer_*`
+Available tools: `hifi_zones` · `hifi_now_playing` · `hifi_control` · `hifi_search` · `hifi_play` · `hifi_status`
 
 ---
 
@@ -183,14 +210,25 @@ Available tools: `hifi_zones` · `hifi_now_playing` · `hifi_control` · `hifi_s
 | [src/main.rs](src/main.rs) | Server entry point |
 | [src/app/mod.rs](src/app/mod.rs) | Dioxus UI root + routing |
 | [src/adapters/roon.rs](src/adapters/roon.rs) | Roon adapter (~2000 lines) |
-| [src/adapters/lms.rs](src/adapters/lms.rs) | LMS adapter (~2400 lines) |
-| [src/adapters/hqplayer.rs](src/adapters/hqplayer.rs) | HQPlayer adapter (~2400 lines) |
+| [src/adapters/upnp.rs](src/adapters/upnp.rs) | UPnP/DLNA adapter (~900 lines) |
 | [src/coordinator.rs](src/coordinator.rs) | Adapter lifecycle manager |
 | [src/aggregator.rs](src/aggregator.rs) | Zone state aggregation |
+| [src/ai/mod.rs](src/ai/mod.rs) | AI chat — Anthropic API, tool loop, markdown rendering |
 | [src/mcp/mod.rs](src/mcp/mod.rs) | MCP tools (Claude AI) |
 | [src/bus/](src/bus/) | Tokio broadcast event bus |
+| [src/app/pages/ai_chat.rs](src/app/pages/ai_chat.rs) | AI chat UI page |
+| [src/app/pages/library.rs](src/app/pages/library.rs) | Library browser page |
+| [src/app/default_zone.rs](src/app/default_zone.rs) | Default-zone context + localStorage persistence |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture detail |
 
 ---
 
-*Updated: 2026-04-17*
+## Default Zone
+
+A persistent default zone can be set from any page that has a zone picker (`/ai`, `/library`). A ☆ button sits next to the zone `<select>`; clicking it saves the current selection as the default (turns ★ yellow). The choice is stored in `localStorage` under the key `roon-ai-default-zone` and pre-selected automatically on every page load until changed.
+
+The shared state is managed by `DefaultZoneContext` (`src/app/default_zone.rs`), initialised at the app root alongside the theme and settings contexts.
+
+---
+
+*Updated: 2026-04-19 — default zone persistence; Roon + UPnP only; AI chat with markdown rendering*

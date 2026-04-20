@@ -1,6 +1,6 @@
 # Unified Hi-Fi Control (v3) — Developer Handoff
 
-**Project**: `unified-hifi-control` — source-agnostic hi-fi audio control bridge  
+**Project**: `unified-hifi-control` — Roon AI hi-fi control bridge  
 **Language**: Rust 1.84+ with Dioxus 0.7.3 fullstack (WASM client + SSR server)  
 **License**: PolyForm Noncommercial 1.0.0  
 **Repo**: `github.com/open-horizon-labs/unified-hifi-control` (branch: `v3`)  
@@ -50,13 +50,8 @@ To pre-configure adapters, create `./data/unified-hifi/unified-hifi-control.toml
 ```toml
 port = 8088
 
-[lms]
-host = "192.168.1.x"
-port = 9000
-
-[hqplayer]
-host = "192.168.1.x"
-port = 8088
+[roon]
+extension_id = "optional"
 ```
 
 ### Useful Commands
@@ -186,7 +181,7 @@ src/                     # Main Rust source
 │   ├── mod.rs           # App root + routing enum
 │   ├── api.rs           # Client-side fetch functions + shared types
 │   ├── components/      # Reusable Dioxus components
-│   ├── pages/           # Routable pages (zones, hqplayer, lms, knobs, settings)
+│   ├── pages/           # Routable pages (zones, hqplayer, knobs, settings)
 │   ├── sse.rs           # Server-Sent Events subscription
 │   └── theme.rs         # Light/dark mode (localStorage)
 ├── components/          # DioxusLabs component wrappers
@@ -202,7 +197,6 @@ src/                     # Main Rust source
 ├── knobs/               # [server-only] Knob state + routing
 └── mdns.rs              # [server-only] mDNS/Bonjour publishing
 
-lms-plugin/              # Perl-based LMS plugin (v3.3.2)
 docs/                    # Architecture docs, ADRs, protocol specs
 tests/                   # Integration tests + linting checks
 .github/workflows/       # CI/CD (build.yml, docker.yml, api-guard.yml)
@@ -220,25 +214,6 @@ All adapters implement `AdapterLogic` trait, wrapped by `AdapterHandle` for life
 - **Protocol**: SOOD discovery + WebSocket (via `rust-roon-api` — forked to `ohc/main` for SO_REUSEADDR fix)
 - **Features**: Zone control, metadata + album art, search (Library/TIDAL/Qobuz), state persistence to `roon_state.json`
 - **Status**: Production. Waiting for upstream merge of SO_REUSEADDR fix before switching back.
-
-### LMS (`src/adapters/lms.rs`, ~2400 lines)
-- **Protocol**: HTTP JSON-RPC (port 9000) + TCP CLI subscription (port 9090)
-- **Architecture**: Two separate adapters — `LmsAdapter` (polling, 2–30s) + `LmsCliAdapter` (real-time events, optional). Factory: `create_lms_adapters()`.
-- **Recent Fix**: Non-integer volume values now clamped safely to 0–100 (a8935b0).
-- **Status**: Production.
-
-### HQPlayer (`src/adapters/hqplayer.rs`, ~2400 lines)
-- **Protocol**: TCP/XML port 4321 (control) + HTTP Digest port 8088 (profiles)
-- **Multi-instance**: `HqpAdapter` + `HqpInstanceManager` + `HqpZoneLinkService`
-- **Config files**: `hqp-config.json` + `hqp-zone-links.json`
-- **Key semantics**: Use INDEX (not VALUE) for pipeline Set commands. Use State's `active_mode`, not Status.
-- **Status**: Production. Recent pipeline semantics fixes.
-
-### OpenHome (`src/adapters/openhome.rs`, ~950 lines)
-- **Protocol**: SSDP discovery (5 OpenHome URNs) + SOAP/UPnP
-- **Features**: Transport, volume, richer metadata than pure UPnP
-- **Zone ID**: `openhome:<uuid>`
-- **Status**: Production.
 
 ### UPnP/DLNA (`src/adapters/upnp.rs`, ~900 lines)
 - **Protocol**: SSDP + SOAP AV Transport
@@ -265,9 +240,8 @@ All adapters implement `AdapterLogic` trait, wrapped by `AdapterHandle` for life
 | Route | Page | Purpose |
 |---|---|---|
 | `/` | Zones | All zones, now-playing, transport + volume controls |
+| `/ai` | AI Music Control | NLS chat with zone picker |
 | `/library` | Library | Browse Roon library by genre, artist, composer, etc. |
-| `/hqplayer` | HQPlayer | Config, instances, zone links, profiles, pipeline DSP |
-| `/lms` | LMS | Server config, player discovery |
 | `/knobs` | Knobs | ESP32 roon-knob firmware management |
 | `/settings` | Settings | Adapter enable/disable, page visibility |
 
@@ -285,20 +259,16 @@ All adapters implement `AdapterLogic` trait, wrapped by `AdapterHandle` for life
 **SDK**: `rust-mcp-sdk` v0.8 with `#[mcp_tool]` macros  
 **Auth**: None (assumes trusted local network)
 
-**Tools (10 total)**:
+**Tools (6 total)**:
 
 | Tool | R/W | Description |
 |---|---|---|
 | `hifi_zones` | R | List all zones across all adapters |
 | `hifi_now_playing` | R | Track/artist/album/volume for a zone |
 | `hifi_control` | RW | play/pause/next/prev/volume_set/up/down |
-| `hifi_search` | R | Search library, TIDAL, Qobuz, LMS providers |
+| `hifi_search` | R | Search library, TIDAL, Qobuz |
 | `hifi_play` | RW | Search + play/queue/radio in one call |
 | `hifi_status` | R | Bridge status, connected adapters, version |
-| `hifi_hqplayer_status` | R | HQPlayer connection + pipeline state |
-| `hifi_hqplayer_profiles` | R | List HQPlayer profiles |
-| `hifi_hqplayer_load_profile` | RW | Switch HQPlayer profile |
-| `hifi_hqplayer_set_pipeline` | RW | Change mode/samplerate/filter/shaper/dither |
 
 **`.mcp.json`**:
 ```json
@@ -332,22 +302,16 @@ port = 8088
 extension_id = "optional"
 display_name = "optional"
 
-[hqplayer]
-host = "192.168.1.100"
-port = 8088
-
-[lms]
-host = "192.168.1.101"
-port = 9000
+[ai]
+api_key = "sk-ant-..."
 ```
 
-**JSON state files**: `app-settings.json`, `roon_state.json`, `hqp-config.json`, `hqp-zone-links.json`, `knobs.json`
+**JSON state files**: `app-settings.json`, `roon_state.json`, `knobs.json`
 
 **Key env vars**:
 - `UHC_PORT` — override port (default: 8088)
 - `RUST_LOG` — logging (default: `unified_hifi_control=debug`)
-- `LMS_HOST` / `LMS_PORT` — auto-config LMS (used by LMS plugin)
-- `LMS_POLL_INTERVAL` — base poll seconds (default: 2)
+- `ANTHROPIC_API_KEY` — enables the AI chat page
 - `FIRMWARE_AUTO_UPDATE` — knob firmware polling (default: true)
 
 ---
@@ -385,17 +349,6 @@ port = 9000
 - QNAP QPKG (x86_64, arm64)
 
 **`api-guard`**: Runs on every PR, validates MCP tool signatures.
-
----
-
-## LMS Plugin (v3.3.2)
-
-**Location**: `lms-plugin/` (Perl)  
-**Files**: `Plugin.pm`, `Helper.pm`, `Settings.pm`, `install.xml`
-
-- Manages the UHC binary as a helper process (auto-start, crash restart, graceful stop)
-- Install via LMS Settings → Plugins → Add repo: `lms-plugin/repo.xml` from GitHub
-- Recent: Plugin category placement fix (e4a1a62)
 
 ---
 
@@ -616,9 +569,9 @@ Browser (chat UI)
   src/ai/mod.rs  ──── Anthropic API (claude-sonnet-4-6)
         │               tool_use loop:
         │                 list_zones → aggregator.get_zones()
-        │                 search     → roon/lms .search()
-        │                 play       → roon/lms .search_and_play()
-        │                 control    → roon/lms .control()
+        │                 search     → roon .search()
+        │                 play       → roon .search_and_play()
+        │                 control    → roon/openhome/upnp .control()
         │
   Returns { response: String, actions: Vec<String> }
 ```
@@ -663,10 +616,10 @@ Key design decisions:
 - Implement `execute_tool(name, input, state: &AppState) -> String` in `src/ai/mod.rs`
 - Wire each tool to existing AppState methods:
   - `list_zones` → `state.aggregator.get_zones().await`
-  - `search_music` → `state.roon.search()` / `state.lms.search()`
-  - `play_music` → `state.roon.search_and_play()` / `state.lms.search_and_play()`
-  - `control_playback` → `state.roon.control()` / `state.lms.control()`
-- Route by zone_id prefix (`roon:`, `lms:`) exactly as MCP server does
+  - `search_music` → `state.roon.search()`
+  - `play_music` → `state.roon.search_and_play()`
+  - `control_playback` → `state.roon.control()` / `state.openhome.control()` / `state.upnp.control()`
+- Route by zone_id prefix (`roon:`, `openhome:`, `upnp:`) exactly as MCP server does
 
 #### Step 5 — Agentic loop
 
@@ -775,9 +728,9 @@ Browser (/ai page)
   src/ai/mod.rs  ──── Anthropic API (claude-sonnet-4-6)
         │               agentic tool-use loop (max 10 turns):
         │                 list_zones    → aggregator.get_zones()
-        │                 search_music  → roon/lms .search()
-        │                 play_music    → roon/lms .search_and_play()
-        │                 control_playback → roon/lms/openhome/upnp .control()
+        │                 search_music  → roon .search()
+        │                 play_music    → roon .search_and_play()
+        │                 control_playback → roon/openhome/upnp .control()
         │
   Returns { response: String, actions: Vec<String> }
 ```
@@ -845,10 +798,8 @@ On startup the server logs either:
 | Route | Page | Purpose |
 |---|---|---|
 | `/` | Zones | All zones, now-playing, transport + volume controls |
-| `/ai` | AI Music Control | **New** — NLS chat with zone picker |
+| `/ai` | AI Music Control | NLS chat with zone picker |
 | `/library` | Library | Browse Roon library |
-| `/hqplayer` | HQPlayer | Config, DSP pipeline |
-| `/lms` | LMS | Server config, player discovery |
 | `/knobs` | Knobs | ESP32 firmware management |
 | `/settings` | Settings | Adapter enable/disable |
 
@@ -862,14 +813,12 @@ On startup the server logs either:
 
 - **No conversation memory** — each chat message is a fresh agentic session; there is no cross-turn context (e.g. "play more like that" won't reference the previous turn)
 - **Synchronous response** — the UI shows a spinner and waits; no streaming. For long tool chains this can feel slow (~3–8s)
-- **Roon-only radio** — `action='radio'` (Roon Radio) is the "similar music" mechanism; LMS zones get an error if radio is requested
+- **Roon-only radio** — `action='radio'` (Roon Radio) is the "similar music" mechanism; OpenHome/UPnP zones get an error if radio is requested
 - **Search result count** — capped at 8 results per tool call; Claude picks the best match
 
 ---
 
----
-
-## Recent Work (2026-04-18) — API Key Setup & AI Chat Verified
+## Recent Work (2026-04-18/19) — API Key Setup & AI Chat Verified
 
 ### Anthropic API key setup (Windows)
 
@@ -891,7 +840,7 @@ api_key = "sk-ant-..."
 
 ### Troubleshooting encountered
 
-- Initial key gave `credit balance too low` error despite $50 balance — cause was a "Credit grant" invoice type that may not unlock API access immediately
+- Initial key gave `credit balance too low` despite $50 balance — cause was a "Credit grant" invoice type that did not immediately unlock API access
 - Fix: create a new API key in the Anthropic Console after verifying balance is active
 - Account is **Tier 2** with full rate limits (1K RPM, 450K TPM for all models)
 - On startup, confirm log line: `AI chat enabled (Anthropic API key found)`
@@ -900,6 +849,293 @@ api_key = "sk-ant-..."
 
 `/ai` page is live and confirmed working at http://localhost:8088/ai.
 
+### Commits & push
+
+| Commit | Description |
+|---|---|
+| `223bfff` | feat: Add AI natural language music control chat interface |
+| `5cc38b0` | docs: Update HANDOFF.md with alphabet filter, grid layout, action item fix, build sequence, and fork details |
+
+Pushed to personal fork: `https://github.com/cfogarty1964/unified-hifi-control` (branch `v3`)
+
+```bash
+git push cfogarty v3
+```
+
+Push to `origin` (open-horizon-labs) requires maintainer access — use a PR if contributing upstream.
+
 ---
 
-*Updated: 2026-04-18 — AI chat live and verified; API key setup documented with correct Windows config path*
+## Recent Work (2026-04-19) — AI Chat Two-Column Layout + Clear Button
+
+### AI Chat page redesign (`src/app/pages/ai_chat.rs`)
+
+The `/ai` page was restructured from a single-column layout into a two-column layout:
+
+- **Left column**: Chat conversation only — user bubbles (right-aligned), assistant text (left-aligned), loading dots, and the sticky input bar + Send button.
+- **Right column**: Tool call log — every `⚡ tool_name(…)` action emitted by the agentic loop is displayed here as it accumulates, with a pulsing `⚡ calling…` placeholder while a request is in-flight. Empty state shown when no calls have been made yet.
+- **Clear button**: Added to the header row (right of the zone picker). Disabled until at least one message exists; clears both columns at once (`messages.write().clear()`).
+- The duplicated send logic (button click + Enter key) was refactored into a standalone `do_send()` helper. `Signal<T>` is `Copy` in Dioxus so signals are passed by value; interior mutability handles writes, and the `spawn` closure captures them without lifetime issues.
+
+**Full build sequence required after this change** (WASM + server binary):
+```bash
+mkdir -p tmp_css
+./tailwindcss.exe -i src/input.css -o tmp_css/tailwind.css --content "src/app/**/*.rs"
+mv tmp_css/tailwind.css public/tailwind.css
+rmdir tmp_css
+dx build --release --platform web --features web
+cargo build --release --features server
+```
+
+Always hard-refresh the browser (`Ctrl+F5`) after a binary update to clear cached WASM.
+
+### Stop/Restart documented in ARCHITECTURE.md
+
+Added a "Stop / Restart" section to `ARCHITECTURE.md` (immediately after the "Run" section) with:
+- PowerShell: `Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue`
+- Git Bash: `taskkill //F //IM unified-hifi-control.exe`
+- Note that the running binary locks the `.exe` on Windows — always stop before rebuilding.
+
+---
+
+## Recent Work (2026-04-19) — Display Rename to "Roon AI"
+
+All user-visible strings renamed from "Unified Hi-Fi Control" to "Roon AI". This is a display-only change — binary name, crate name, config paths, and the Roon extension ID are unchanged to avoid breaking existing installs.
+
+### Files changed
+
+| File | What changed |
+|---|---|
+| `src/app/components/layout.rs` | Browser tab title suffix (`… - Roon AI`) + footer text |
+| `src/app/components/nav.rs` | Logo `alt` attribute |
+| `src/adapters/roon.rs:1492` | Roon extension display name (shown in Roon → Settings → Extensions) |
+| `src/main.rs` | Startup log line, mDNS advertised name, Flash Knob page `<title>` |
+| `src/mcp/mod.rs` | MCP server `title` field and instructions header |
+
+### What was intentionally left unchanged
+
+- **`extension_id`** (`com.muness.unified-hifi-control`) — changing this would de-authorise the existing Roon Extension and require re-pairing in Roon Settings
+- **MCP `name`** (`unified-hifi-control`) — identifier used in `.mcp.json`; changing it would break existing Claude MCP configs
+- **Config directory paths** (`unified-hifi-control`, `unified-hifi`) — changing these would silently lose existing settings on disk
+- **Binary / crate name** — larger lift; tracked as a future task
+
+### Bigger rename (future)
+
+To also rename the binary to `roon-ai.exe`:
+1. Change `name` in `Cargo.toml`
+2. Update all `use unified_hifi_control::` module paths (automated with `cargo fix` or sed)
+3. Update `RUST_LOG` default in `main.rs`
+4. Update LMS plugin `Plugin.pm` / `install.xml` binary references
+5. Migrate or alias the config directory
+6. Update CI matrix binary names and Docker image tags
+
+---
+
+## Known Gaps / Next Steps (updated 2026-04-19)
+
+- **Binary rename**: Display strings say "Roon AI" but the binary is still `unified-hifi-control.exe`. See "Bigger rename" notes above.
+- **One-tap play shortcut**: From an album/artist view, still requires two clicks ("Play Album" → "Play Now"). A direct ▶ button on each row would collapse this to one tap.
+- **AI conversation memory**: Each chat message is a fresh agentic session — no cross-turn context ("play more like that" won't work). Fix: persist the `messages` array across turns in the UI.
+- **AI streaming**: Response is synchronous; UI shows a spinner for ~3–8s on long tool chains. Fix: stream the final text reply via SSE.
+- **Roon API fork**: Waiting for SO_REUSEADDR fix to merge upstream; then switch back to official crate.
+- **MCP auth**: No authentication on `/mcp` endpoint — assumes trusted LAN.
+- **E2E tests**: Playwright config exists in `e2e/` but coverage is limited.
+
+---
+
+## Recent Work (2026-04-19) — LMS Removal
+
+All Logitech Media Server (LMS) code has been removed from the codebase. The application at this point supported Roon, HQPlayer, OpenHome, and UPnP.
+
+### Files deleted
+
+| File | Lines |
+|---|---|
+| `src/adapters/lms.rs` | ~2658 |
+| `src/adapters/lms_discovery.rs` | ~404 |
+| `src/app/pages/lms.rs` | ~352 |
+| `lms-plugin/` (entire directory) | — |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/adapters/mod.rs` | Removed `pub mod lms`, `pub mod lms_discovery`, re-exports |
+| `src/api/mod.rs` | Removed `lms` from `AppState`, LMS routes, `LmsAdapter` import, LMS status, LMS adapter settings |
+| `src/app/api.rs` | Removed `LmsStatus`, `LmsConfig`, `LmsPlayersResponse`, `LmsPlayer` structs; `lms: bool` from `AdapterSettings`; `hide_lms_page` from `AppSettings` |
+| `src/app/mod.rs` | Removed `/lms` route |
+| `src/app/pages/mod.rs` | Removed `mod lms`, `pub use lms::Lms` |
+| `src/app/pages/settings.rs` | Removed LMS config section from settings UI |
+| `src/app/pages/zones.rs` | Removed LMS SSE event handling, zone sort priority |
+| `src/app/components/nav.rs` | Removed LMS nav links (desktop + mobile) |
+| `src/app/settings_context.rs` | Removed `lms_enabled` signal, `hide_lms()`, updated `update()` signature |
+| `src/app/sse.rs` | Removed `LmsConnected`, `LmsDisconnected`, `LmsPlayerStateChanged`, `should_refresh_lms()` |
+| `src/bus/events.rs` | Removed all LMS bus event variants and `PrefixedZoneId::lms()` |
+| `src/ai/mod.rs` | Removed LMS branches from all 4 tool handlers, removed `format_search_results_lms()` |
+| `src/config/mod.rs` | Removed `LmsConfig`, `lms` from `Config`, `default_lms_port()`, LMS migration path |
+| `src/coordinator.rs` | Removed `"lms"` and `"lms-cli"` from `AVAILABLE_ADAPTERS` |
+| `src/main.rs` | Removed `create_lms_adapters`, LMS from startable adapters and `AppState::new` |
+| `src/mcp/mod.rs` | Removed LMS dispatch branches from all tool handlers |
+| `src/knobs/routes.rs` | Removed `lms:` zone filter, adapter settings check, `control_lms()` function (~80 lines), and dispatch branch in `knob_control_handler` |
+| `src/bus/events.rs` | Removed `LmsConnected`/`LmsDisconnected`/`LmsPlayerStateChanged` from `is_legacy_event()` match; removed `PrefixedZoneId::lms()` test |
+| `src/main.rs` | Removed `lms.stop().await` from shutdown sequence |
+| `src/lib.rs` | Updated doc comment |
+
+### Why
+
+LMS (Logitech Media Server / Squeezebox) was never going to be used in this deployment. Removing it eliminates ~3,400 lines of dead code and simplifies every layer of the stack — adapters, API, UI, SSE, bus events, config.
+
+### Build verified
+
+Full build ran clean after all edits:
+- CSS: 102ms
+- `dx build`: WASM + server binary compiled (568/568 crates)
+- `cargo build --release --features server`: succeeded (warnings only, no errors)
+
+Startup log confirms LMS is gone — only `roon enabled`, `openhome disabled`, `upnp disabled` in the adapter list at this point. AI chat key was found and logged as enabled.
+
+---
+
+---
+
+## Recent Work (2026-04-19) — HQPlayer and OpenHome Removal
+
+All HQPlayer and OpenHome adapter code has been removed. The application now supports Roon and UPnP only. HQPlayer users should connect via Roon (Roon → HQPlayer integration).
+
+### Files deleted
+
+| File | Description |
+|---|---|
+| `src/adapters/hqplayer.rs` | HQPlayer TCP/XML adapter (~2400 lines) |
+| `src/adapters/openhome.rs` | OpenHome SSDP/SOAP adapter (~950 lines) |
+| `src/app/pages/hqplayer.rs` | HQPlayer settings/pipeline UI page |
+| `src/app/components/hqp_controls.rs` | HQPlayer profile + matrix selector components |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/adapters/mod.rs` | Removed `mod hqplayer`, `mod openhome` |
+| `src/api/mod.rs` | Removed all HQPlayer/OpenHome handlers, routes, request types, and `AppState` fields |
+| `src/main.rs` | Removed adapter instantiation, all `/hqplayer/*` and `/openhome/*` routes, shutdown calls |
+| `src/coordinator.rs` | Removed `"openhome"` from `AVAILABLE_ADAPTERS` and `register_from_settings` |
+| `src/config/mod.rs` | Removed `HqpConfig`, `hqplayer` from `Config`, `migrate_hqp_config`, stale LMS tests |
+| `src/bus/events.rs` | Removed `openhome`/`hqplayer` `PrefixedZoneId` constructors; removed HQP legacy events |
+| `src/app/mod.rs` | Removed `Route::HqPlayer` and `/hqplayer` route |
+| `src/app/pages/mod.rs` | Removed `mod hqplayer`, `HqPlayer` export |
+| `src/app/pages/zones.rs` | Removed HQPlayer DSP controls, profile/matrix signals and handlers |
+| `src/app/pages/settings.rs` | Removed OpenHome and HQPlayer rows from the features table |
+| `src/app/components/mod.rs` | Removed `mod hqp_controls` and its exports |
+| `src/app/components/layout.rs` | Removed `hide_hqp` prop |
+| `src/app/components/nav.rs` | Removed HQPlayer nav link (desktop + mobile), `hide_hqp` prop |
+| `src/app/settings_context.rs` | Removed `hqp_enabled` signal, `hide_hqp()`, updated `update()` signature |
+| `src/app/api.rs` | Removed `HqpStatus` and all HQPlayer client types |
+| `src/app/sse.rs` | Removed `OpenHomeDeviceFound`/`OpenHomeDeviceLost` events |
+| `src/mcp/mod.rs` | Removed 4 HQPlayer MCP tools; tool count reduced from 10 to 6 |
+| `src/ai/mod.rs` | Removed OpenHome branch from `control_playback` tool dispatch |
+| `src/knobs/routes.rs` | Removed HQPlayer DSP info, OpenHome control branch, `DspInfo` struct |
+
+### Build verified
+
+Full build ran clean after all edits (`cargo check --features server`: 0 errors).
+
+---
+
+---
+
+## Recent Work (2026-04-19) — AI Chat Markdown Rendering
+
+AI chat responses now render as formatted HTML instead of raw markdown text.
+
+### Problem
+
+Claude's responses used markdown (headers, bold, numbered lists, `---` dividers) but the UI displayed them as literal characters — `**bold**`, `### heading`, `---`, etc.
+
+### Solution
+
+- **Server-side conversion** (`src/ai/mod.rs`): the final response text is passed through `pulldown_cmark` to produce HTML before being placed in `AiChatResponse.response`
+- **Client rendering** (`src/app/pages/ai_chat.rs`): assistant bubbles use `dangerous_inner_html` to render the HTML directly into the DOM
+- **Prose styles** (`src/input.css`): new `.ai-prose` class styles `<p>`, `<h3>`, `<ul>`, `<ol>`, `<li>`, `<strong>`, `<em>`, `<hr>`, `<code>`, `<blockquote>` within the bubble
+
+### New dependency
+
+`pulldown-cmark = "0.12"` added as a server-only optional dependency. No WASM bundle impact — conversion happens on the server.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Added `pulldown-cmark = { version = "0.12", optional = true }` to server feature |
+| `src/ai/mod.rs` | Added `markdown_to_html()` helper; response field now contains HTML |
+| `src/app/pages/ai_chat.rs` | Assistant bubbles use `dangerous_inner_html`; added `ai-prose` class |
+| `src/input.css` | Added `.ai-prose` CSS block |
+
+---
+
+## Recent Work (2026-04-19) — Obsolete File Cleanup
+
+Removed all files that referenced deleted adapters (HQPlayer, OpenHome, LMS) or were historical planning/spike documents no longer relevant to the codebase.
+
+### Files deleted
+
+| File | Reason |
+|---|---|
+| `HQPLAYER-MULTI-INSTANCE.md` | HQPlayer removed |
+| `RUST_SPIKE.md` | Historical pre-Rust spike doc; superseded |
+| `docs/hqplayer-protocol-reference.md` | HQPlayer removed |
+| `docs/lms-plugin.md` | LMS removed |
+| `docs/LMS-PLUGIN-SPEC.md` | LMS removed |
+| `docs/lyrion.md` | LMS/Lyrion removed |
+| `docs/ARCHITECTURE-RECOMMENDATION-B-REJECTED.md` | Explicitly rejected; historical |
+| `docs/tasks/phase-1-bus-foundation.md` | Completed JS-era task plan |
+| `docs/Dioxus-components-research.md` | Hydration debugging research; already resolved |
+| `data/hqp-config.example-multi.json` | HQPlayer config example |
+| `.oh/hqplayer-spec.md` | HQPlayer spec |
+| `mcp/index.js` | Old Node.js MCP server; superseded by `src/mcp/mod.rs` |
+| `src/hqplayer/.gitkeep` | HQPlayer placeholder directory |
+| `tests/mock_servers/hqplayer.rs` | HQPlayer mock |
+| `tests/mock_servers/lms.rs` | LMS mock |
+| `tests/mock_servers/openhome.rs` | OpenHome mock |
+| `tests/adapter_integration.rs` | Referenced `HqpAdapter`, `LmsAdapter` — broken |
+| `tests/protocol_integration.rs` | Referenced `HqpAdapter`, `LmsAdapter`, `OpenHomeAdapter` — broken |
+| `tests/zones_sha_integration.rs` | Referenced `MockLmsServer`, `HqpAdapter`, `OpenHomeAdapter` — broken |
+| `.wm/` (4 files) | AI tool working memory scratch files |
+
+### Files updated
+
+| File | Change |
+|---|---|
+| `tests/mock_servers/mod.rs` | Removed exports for deleted hqplayer/lms/openhome mocks |
+| `tests/fixtures/api_routes.txt` | Removed all HQPlayer, LMS, and OpenHome route entries |
+
+### No rebuild required
+
+Only docs, tests, and fixture files were modified — no compiled source changed.
+
+---
+
+*Updated: 2026-04-19 — HQPlayer and OpenHome removed; Roon + UPnP only; obsolete files cleaned up*
+
+---
+
+## Recent Work (2026-04-19) — Persistent Default Zone
+
+### Feature
+
+A persistent default zone can be set from any page that has a zone picker (`/ai`, `/library`). A ☆ button sits immediately after each zone `<select>`; clicking it saves the current selection as the default (button turns ★ yellow). On any subsequent page load — including navigating between `/ai` and `/library` — the stored default is pre-selected automatically. The choice persists across browser restarts via `localStorage`.
+
+### How it works
+
+- **Storage key**: `roon-ai-default-zone` in `localStorage`
+- **Shared context**: `DefaultZoneContext` (`src/app/default_zone.rs`) — a `Signal<String>` initialised at the app root, following the same pattern as `ThemeContext`
+- **Pre-selection logic**: on mount, each page checks the stored default first; if the stored zone is still in the zone list it is used, otherwise falls back to the first Roon zone as before
+- **Star button**: ☆ (grey) when the current selection differs from the stored default; ★ (yellow) when it matches; clicking always overwrites the stored default with the current selection
+
+### Files created / modified
+
+| File | Change |
+|---|---|
+| `src/app/default_zone.rs` | **New** — `DefaultZoneContext`, `use_default_zone_provider()`, `use_default_zone()`, localStorage helpers |
+| `src/app/mod.rs` | Added `pub mod default_zone`; calls `use_default_zone_provider()` at app root |
+| `src/app/pages/ai_chat.rs` | Pre-selects default zone on mount; ★/☆ button next to zone picker |
+| `src/app/pages/library.rs` | Pre-selects default zone on mount; ★/☆ button next to zone picker |

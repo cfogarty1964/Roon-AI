@@ -1,232 +1,268 @@
-# Unified Hi-Fi Control
+# Roon AI
 
 [![Build](https://github.com/open-horizon-labs/unified-hifi-control/actions/workflows/build.yml/badge.svg?branch=v3)](https://github.com/open-horizon-labs/unified-hifi-control/actions/workflows/build.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/open-horizon-labs/unified-hifi-control)](https://github.com/open-horizon-labs/unified-hifi-control/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/open-horizon-labs/unified-hifi-control/total)](https://github.com/open-horizon-labs/unified-hifi-control/releases)
 
-Control your hi-fi system from anywhere — a hardware knob on your couch, your phone, or just ask Claude.
+A Roon and UPnP/DLNA hi-fi control bridge with a web UI, AI natural language chat, library browser, and Claude MCP integration.
 
-This bridge connects your music sources (Roon, LMS, UPnP) to any control surface you prefer. No vendor lock-in: mix and match sources, add HQPlayer DSP processing, and control it all from one place.
+Control your music with your voice, a chat message, a hardware knob, or a browser — all from one place.
 
-## Control Surfaces
+---
 
-Once the bridge is running, control your system from:
+## Features
 
-- **Web UI** — Built-in at `http://your-bridge:8088`
-- **[roon-knob](https://github.com/muness/roon-knob)** — ESP32-S3 hardware knob with OLED display
-- **iOS & Apple Watch** — In alpha testing. [Get in touch](https://github.com/open-horizon-labs/unified-hifi-control/issues) if you'd like to try it.
-- **Claude & AI agents** — Via the built-in MCP server (see [MCP Server](#mcp-server-claude-integration) below)
+- **Zones page** — all Roon and UPnP zones at a glance, with transport and volume controls
+- **AI Music Control** — type natural language requests ("play late-night jazz piano on the living room zone") and the built-in Claude AI agent searches and plays
+- **Library browser** — browse your Roon library by genre, artist, composer, album; alphabet filter and grid layout for large collections; one-tap playback
+- **Persistent default zone** — set a default zone (★) from any zone picker; it pre-selects on every page until changed
+- **ESP32 Knob** — hardware volume/transport knob with OTA firmware management
+- **MCP server** — Claude AI tools for external agents and Claude Code
+
+---
+
+## Supported Sources
+
+| Source | Discovery | Transport | Search |
+|--------|-----------|-----------|--------|
+| Roon | SOOD | ✅ full | ✅ library + TIDAL + Qobuz |
+| UPnP / DLNA | SSDP | ✅ play/pause/vol | — |
+
+---
 
 ## Installation
 
-### Docker (Recommended)
+### Docker (Linux host recommended)
 
-```bash
-docker pull muness/unified-hifi-control:latest
-```
-
-### Synology NAS (DSM 7)
-
-Download the SPK package from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
-- `unified-hifi-control_*_apollolake.spk` — Intel x86_64 (DS918+, DS920+, etc.)
-- `unified-hifi-control_*_rtd1296.spk` — ARM64 (DS220+, DS420+, etc.)
-
-### QNAP NAS
-
-Download the QPKG package from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
-- `unified-hifi-control_*_x86_64.qpkg` — Intel/AMD x86_64
-- `unified-hifi-control_*_arm_64.qpkg` — ARM64
-
-### LMS Plugin
-
-Add this repository URL in LMS Settings → Plugins → Additional Repositories:
-```
-https://raw.githubusercontent.com/open-horizon-labs/unified-hifi-control/v3/lms-plugin/repo.xml
-```
-Then install "Unified Hi-Fi Control" from the plugin list. The plugin automatically downloads and manages the bridge binary.
-
-### Binary Downloads
-
-Pre-built binaries available for Linux (x64, arm64, armv7), macOS (x64, arm64), and Windows from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases).
-
-## Quick Start (Docker)
+`network_mode: host` is required for Roon SOOD and UPnP SSDP multicast discovery. On Windows/macOS Docker Desktop runs inside a Linux VM and blocks multicast — use the native binary instead (see below).
 
 ```yaml
 # docker-compose.yml
 services:
   unified-hifi-control:
     image: muness/unified-hifi-control:latest
-    network_mode: host  # Required for Roon/UPnP discovery
+    network_mode: host
     volumes:
       - ./data:/data
     environment:
       - CONFIG_DIR=/data
-      # - UHC_PORT=8088       # Bridge port (default: 8088)
-      # - RUST_LOG=info       # Log level: trace, debug, info, warn, error
+      - ANTHROPIC_API_KEY=sk-ant-...   # optional — enables AI chat
     restart: unless-stopped
 ```
 
 ```bash
 docker compose up -d
-# Access http://localhost:8088
+# Open http://localhost:8088
 ```
 
-### Environment Variables
+### Native Binary (Windows — recommended for Roon)
+
+Pre-built binaries for Linux (x64, arm64, armv7), macOS (universal), and Windows are available on the [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases) page.
+
+**Windows:**
+```powershell
+$env:ANTHROPIC_API_KEY="sk-ant-..."   # optional — enables AI chat
+$env:RUST_LOG="debug"
+.\unified-hifi-control.exe
+# Open http://localhost:8088
+```
+
+### Synology NAS (DSM 7)
+
+Download the SPK from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
+- `*_apollolake.spk` — Intel x86_64 (DS918+, DS920+, etc.)
+- `*_rtd1296.spk` — ARM64 (DS220+, DS420+, etc.)
+
+### QNAP NAS
+
+Download the QPKG from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
+- `*_x86_64.qpkg` — Intel/AMD
+- `*_arm_64.qpkg` — ARM64
+
+---
+
+## Configuration
+
+Config directory (Windows default): `%APPDATA%\unified-hifi-control\unified-hifi\`
+
+Override with `UHC_CONFIG_DIR` env var.
+
+**`unified-hifi-control.toml`:**
+```toml
+port = 8088
+
+[roon]
+# extension_id = "optional"
+# display_name = "optional"
+
+[ai]
+api_key = "sk-ant-..."   # Anthropic API key — enables the /ai chat page
+```
+
+**Key environment variables:**
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `UHC_PORT` | Bridge HTTP port | `8088` |
-| `CONFIG_DIR` | Directory for config/state files | `/data` |
-| `RUST_LOG` | Log filter (e.g., `info`, `debug`, `unified_hifi_control=debug`) | `debug` |
-| `LMS_HOST` | Auto-configure LMS backend (used by LMS plugin) | — |
-| `LMS_PORT` | LMS server port | `9000` |
+| `UHC_PORT` | HTTP port | `8088` |
+| `UHC_CONFIG_DIR` | Config/state directory | platform default |
+| `ANTHROPIC_API_KEY` | Enables AI chat (overrides TOML) | — |
+| `RUST_LOG` | Log filter | `unified_hifi_control=debug` |
+| `FIRMWARE_AUTO_UPDATE` | Knob firmware auto-download | `true` |
 
-Legacy aliases: `PORT` (→ `UHC_PORT`), `LOG_LEVEL` (→ `RUST_LOG`)
+---
 
-**Note:** Port 8088 is also HQPlayer's default. If running both on the same host, change one.
+## AI Music Control
 
-## HQPlayer DSP Integration
+The `/ai` page lets you control your music with natural language. It uses the Claude API (claude-sonnet-4-6) with a multi-turn tool-use loop.
 
-If you route audio through HQPlayer for upsampling or filtering, this bridge lets you control HQPlayer's DSP settings (profiles, filters, shapers) alongside your zone controls.
+**Requirements:** an Anthropic API key ([console.anthropic.com](https://console.anthropic.com/settings/keys)). Set it in the config file or via `ANTHROPIC_API_KEY`. On startup the server logs either:
+- `AI chat enabled (Anthropic API key found)`
+- `AI chat disabled (set ANTHROPIC_API_KEY to enable)`
 
-**Note:** You need to set up audio routing to HQPlayer separately (via Roon, LMS/BubbleUPnP, or OpenHome). This bridge exposes the DSP controls, not the audio path.
+**Example queries:**
+- "Play the Adagietto from Mahler's 5th"
+- "I love that piece — start Roon Radio from it"
+- "Queue some late-night jazz piano on the Living Room zone"
+- "Pause" / "Turn the volume up"
 
-### Setup
+The right panel shows every tool call the agent makes as it works.
 
-1. Open the web UI at `/hqplayer`
-2. Enter your HQPlayer host IP and ports (native: 4321, web: 8088)
-3. Link zones to HQPlayer instances — each zone can use a different HQPlayer
-4. Zone now-playing info will include HQPlayer pipeline status
+---
 
-## Architecture
+## Web UI Pages
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                   Unified Hi-Fi Control Bridge                       │
-│  ┌────────┐  ┌────────┐  ┌──────────┐  ┌────────┐  ┌──────────┐    │
-│  │  Roon  │  │ Lyrion │  │ OpenHome │  │  UPnP  │  │ HQPlayer │    │
-│  │        │  │  /LMS  │  │          │  │  /DLNA │  │   DSP    │    │
-│  └────────┘  └────────┘  └──────────┘  └────────┘  └──────────┘    │
-│                                                                      │
-│  HTTP API + SSE                                                       │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-           ESP32                           Web UI
-           Knob
-```
+| Route | Page | Purpose |
+|-------|------|---------|
+| `/` | Zones | All zones, now-playing, transport + volume |
+| `/ai` | AI Music Control | Natural language chat |
+| `/library` | Library | Browse Roon library with alphabet filter |
+| `/knobs` | Knobs | ESP32 roon-knob firmware management |
+| `/settings` | Settings | Adapter enable/disable, page visibility |
+
+### Default Zone
+
+Any page with a zone picker shows a ☆ button next to the dropdown. Clicking it saves that zone as the default (turns ★ yellow) and pre-selects it on every page load until changed. The preference is stored in `localStorage`.
+
+---
 
 ## MCP Server (Claude Integration)
 
-Control your hi-fi with natural language. The bridge includes an MCP server so Claude can search, play, queue music, adjust volume, and switch HQPlayer profiles.
+The bridge exposes an MCP endpoint so Claude Code, Claude Desktop, and other MCP clients can control your hi-fi directly.
 
-### Setup
-
-1. Start the bridge (`docker compose up -d`)
-2. Add to your MCP config (Claude Code, ChatGPT, BoltAI, etc.):
-
+**Add to `.mcp.json`:**
 ```json
 {
   "mcpServers": {
     "unified-hifi-control": {
       "type": "http",
-      "url": "http://<your-bridge-host>:8088/mcp"
+      "url": "http://<bridge-host>:8088/mcp"
     }
   }
 }
 ```
 
-### Available Tools
+**Available tools:**
 
 | Tool | Description |
 |------|-------------|
-| `hifi_zones` | List available zones (Roon, LMS, OpenHome, UPnP) |
-| `hifi_now_playing` | Get current track, artist, album, play state |
-| `hifi_control` | Play, pause, next, previous, volume control |
-| `hifi_search` | Search library, TIDAL, or Qobuz *(Roon, LMS)* |
-| `hifi_play` | Search and play/queue in one command *(Roon, LMS)* |
-| `hifi_status` | Overall bridge status |
-| `hifi_hqplayer_status` | HQPlayer Embedded status and pipeline |
-| `hifi_hqplayer_profiles` | List saved HQPlayer profiles |
-| `hifi_hqplayer_load_profile` | Switch HQPlayer profile |
-| `hifi_hqplayer_set_pipeline` | Change filter, shaper, dither settings |
+| `hifi_zones` | List all zones across all adapters |
+| `hifi_now_playing` | Track, artist, album, volume for a zone |
+| `hifi_control` | play / pause / next / prev / volume |
+| `hifi_search` | Search library, TIDAL, Qobuz |
+| `hifi_play` | Search + play/queue/radio in one call |
+| `hifi_status` | Bridge status and connected adapters |
 
-*Search and play work with Roon and LMS. Transport controls work with all adapters.*
+---
 
-### Example Usage
+## Architecture
 
-Ask Claude: "Play some jazz piano" or "Queue Hotel California" or "What's playing?" or "Turn the volume down"
+```
+┌──────────────────────────────────────────────────────────────┐
+│                   Browser / Claude AI                         │
+│           http://localhost:8088   /mcp endpoint               │
+└────────────────────────┬─────────────────────────────────────┘
+                         │ HTTP + SSE
+┌────────────────────────▼─────────────────────────────────────┐
+│           unified-hifi-control.exe  (Axum + Dioxus)           │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │               Tokio Event Bus                         │    │
+│  │  ZoneDiscovered · ZoneUpdated · NowPlayingChanged     │    │
+│  └──────────────┬────────────────────────┬──────────────┘    │
+│                 │                        │                     │
+│            ┌───▼───┐               ┌────▼───┐                │
+│            │ Roon  │               │  UPnP  │                │
+│            │ SOOD  │               │  SSDP  │                │
+│            └───────┘               └────────┘                │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │               ZoneAggregator                          │    │
+│  └──────┬──────────────┬──────────────┬──────────┬──────┘    │
+│      ┌──▼──┐       ┌───▼──┐      ┌───▼──┐   ┌───▼──┐        │
+│      │ API │       │ SSE  │      │ MCP  │   │  AI  │        │
+│      └─────┘       └──────┘      └──────┘   └──────┘        │
+└──────────────────────────────────────────────────────────────┘
+```
 
-<details>
-<summary><strong>Firmware Updates (roon-knob)</strong></summary>
+---
 
-The bridge automatically downloads new [roon-knob](https://github.com/muness/roon-knob) firmware from GitHub every 6 hours. Knobs check `/firmware/version` on startup and OTA update from the bridge.
+## Building from Source
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `FIRMWARE_AUTO_UPDATE` | Enable/disable auto-download | `true` |
-| `FIRMWARE_POLL_INTERVAL_MINUTES` | Check interval | `360` (6 hours) |
-
-</details>
-
-<details>
-<summary><strong>Version History (for nerds)</strong></summary>
-
-| Version | Stack | Notes |
-|---------|-------|-------|
-| **v1** | Node.js | Proof of concept — validated the idea of a unified control surface |
-| **v2** | Node.js | Production release — in-memory event bus, multi-backend support |
-| **v3** | Rust | Complete rewrite — native packages (Synology, QNAP, LMS plugin), 10x smaller memory footprint, single static binary |
-
-The v3 rewrite was motivated by packaging requests (NAS users wanted native packages, not Docker) and the opportunity to dramatically reduce resource usage. The Rust binary uses ~15MB RAM vs ~150MB for Node.js.
-
-</details>
-
-<details>
-<summary><strong>Development</strong></summary>
-
-### Prerequisites
-
-- Rust 1.84+ with `wasm32-unknown-unknown` target
-- [Dioxus CLI](https://dioxuslabs.com/learn/0.6/getting_started)
+### Prerequisites (one-time)
 
 ```bash
 rustup target add wasm32-unknown-unknown
-cargo install dioxus-cli --locked
-cp scripts/pre-commit .git/hooks/
+cargo install dioxus-cli --locked --version 0.7.3
+# Download tailwindcss.exe (Windows) from github.com/tailwindlabs/tailwindcss/releases
 ```
 
-### Build & Run
+### Build (Windows)
 
 ```bash
-make css                                              # Build Tailwind CSS
-dx build --release --platform web --features web      # Build server + WASM
+# 1. Tailwind CSS  (v4 CLI has a mkdir bug on Windows — use tmp dir)
+mkdir -p tmp_css
+./tailwindcss.exe -i src/input.css -o tmp_css/tailwind.css --content "src/app/**/*.rs"
+mv tmp_css/tailwind.css public/tailwind.css
+rmdir tmp_css
 
-cd target/dx/unified-hifi-control/release/web
-PORT=8088 ./unified-hifi-control                      # Run at http://localhost:8088
+# 2. WASM bundle + server binary
+dx build --release --platform web --features web
+cargo build --release --features server
 ```
 
-For hot reload during development:
+> Always run both `dx build` and `cargo build`. `dx build` produces the WASM; `cargo build` embeds it into the final `.exe`. Running only one leaves the other stale.
+
+### Run
+
+```powershell
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+### Hot Reload (UI development)
+
 ```bash
-PORT=8088 dx serve --release --platform web --features web --port 8088
+dx serve --platform web --features web --port 8088
 ```
 
-### Test & Lint
+---
 
-```bash
-cargo test --workspace
-cargo fmt --check && cargo clippy -- -D warnings
-```
+## roon-knob Firmware
 
-**Note:** Use `dx build`, not `cargo build` — the web UI requires the WASM bundle that only `dx` produces.
+The bridge automatically downloads new [roon-knob](https://github.com/muness/roon-knob) firmware from GitHub every 6 hours. Knobs check `/firmware/version` on startup and OTA-update directly from the bridge.
 
-</details>
+---
+
+## Version History
+
+| Version | Stack | Notes |
+|---------|-------|-------|
+| **v1** | Node.js | Proof of concept |
+| **v2** | Node.js | Production release — multi-backend, in-memory event bus |
+| **v3** | Rust | Complete rewrite — Roon + UPnP, AI chat, library browser, single static binary (~15 MB RAM) |
+
+---
 
 ## License
 
-As of v2.5.0, this project is licensed under the [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) license.
-
-Versions up to and including v2.4.1-prior-license were released under a custom source-available license (see LICENSE-PRIOR).
-
-For commercial licensing inquiries, see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)
