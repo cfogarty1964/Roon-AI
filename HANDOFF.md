@@ -509,7 +509,7 @@ Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
 
 ### Personal Fork
 
-A personal fork has been pushed to **https://github.com/cfogarty1964/unified-hifi-control** (branch: `v3`).  
+A personal fork has been pushed to **https://github.com/cfogarty1964/Roon-AI** (branch: `v3`).  
 Remote name locally: `cfogarty`. Push personal changes with:
 ```bash
 git push cfogarty v3
@@ -856,7 +856,7 @@ api_key = "sk-ant-..."
 | `223bfff` | feat: Add AI natural language music control chat interface |
 | `5cc38b0` | docs: Update HANDOFF.md with alphabet filter, grid layout, action item fix, build sequence, and fork details |
 
-Pushed to personal fork: `https://github.com/cfogarty1964/unified-hifi-control` (branch `v3`)
+Pushed to personal fork: `https://github.com/cfogarty1964/Roon-AI` (branch `v3`)
 
 ```bash
 git push cfogarty v3
