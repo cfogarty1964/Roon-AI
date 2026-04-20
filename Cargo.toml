@@ -31,6 +31,7 @@ server = [
     "dep:mime_guess",
     "dep:http-body-util",
     "dep:rust-mcp-sdk",
+    "dep:pulldown-cmark",
 ]
 web = ["dioxus/web"]
 
@@ -122,6 +123,9 @@ resvg = { version = "0.46.0", features = ["default"], optional = true }
 
 # MCP server (server only)
 rust-mcp-sdk = { version = "0.8", default-features = false, features = ["server", "macros", "hyper-server", "sse"], optional = true }
+
+# Markdown rendering for AI chat responses (server only)
+pulldown-cmark = { version = "0.12", optional = true }
 
 # ============ WEB-ONLY DEPENDENCIES ============
 [target.'cfg(target_arch = "wasm32")'.dependencies]

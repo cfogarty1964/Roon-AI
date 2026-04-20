@@ -7,14 +7,8 @@ use dioxus::prelude::*;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct NavProps {
-    /// The currently active page ID (e.g., "zones", "hqplayer", "settings")
+    /// The currently active page ID (e.g., "zones", "settings")
     pub active: String,
-    /// Hide HQPlayer tab (fallback if settings not loaded)
-    #[props(default = false)]
-    pub hide_hqp: bool,
-    /// Hide LMS tab (fallback if settings not loaded)
-    #[props(default = false)]
-    pub hide_lms: bool,
     /// Hide Knobs tab (fallback if settings not loaded)
     #[props(default = false)]
     pub hide_knobs: bool,
@@ -29,14 +23,10 @@ pub fn Nav(props: NavProps) -> Element {
     let settings_ctx = use_settings();
 
     // Use context values if loaded, otherwise fall back to props
-    let (hide_hqp, hide_lms, hide_knobs) = if settings_ctx.is_loaded() {
-        (
-            settings_ctx.hide_hqp(),
-            settings_ctx.hide_lms(),
-            settings_ctx.hide_knobs(),
-        )
+    let hide_knobs = if settings_ctx.is_loaded() {
+        settings_ctx.hide_knobs()
     } else {
-        (props.hide_hqp, props.hide_lms, props.hide_knobs)
+        props.hide_knobs
     };
 
     let nav_link_class = |page: &str| {
@@ -61,7 +51,7 @@ pub fn Nav(props: NavProps) -> Element {
                     Link { class: "nav-brand flex items-center", to: Route::Zones {},
                         img {
                             src: "{*LOGO_DATA_URL}",
-                            alt: "Hi-Fi Control",
+                            alt: "Roon AI",
                             class: "h-6 w-6 rounded"
                         }
                     }
@@ -72,12 +62,6 @@ pub fn Nav(props: NavProps) -> Element {
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
                     Link { class: nav_link_class("ai"), to: Route::AiChat {}, "AI" }
-                    if !hide_hqp {
-                        Link { class: nav_link_class("hqplayer"), to: Route::HqPlayer {}, "HQPlayer" }
-                    }
-                    if !hide_lms {
-                        Link { class: nav_link_class("lms"), to: Route::Lms {}, "LMS" }
-                    }
                     if !hide_knobs {
                         Link { class: nav_link_class("knobs"), to: Route::Knobs {}, "Knobs" }
                     }
@@ -112,12 +96,6 @@ pub fn Nav(props: NavProps) -> Element {
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, onclick: move |_| menu_open.set(false), "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
                     Link { class: nav_link_class("ai"), to: Route::AiChat {}, onclick: move |_| menu_open.set(false), "AI" }
-                    if !hide_hqp {
-                        Link { class: nav_link_class("hqplayer"), to: Route::HqPlayer {}, onclick: move |_| menu_open.set(false), "HQPlayer" }
-                    }
-                    if !hide_lms {
-                        Link { class: nav_link_class("lms"), to: Route::Lms {}, onclick: move |_| menu_open.set(false), "LMS" }
-                    }
                     if !hide_knobs {
                         Link { class: nav_link_class("knobs"), to: Route::Knobs {}, onclick: move |_| menu_open.set(false), "Knobs" }
                     }

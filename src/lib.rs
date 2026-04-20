@@ -1,12 +1,11 @@
-//! Unified Hi-Fi Control - Rust Implementation
+//! Roon AI - Hi-Fi Control Bridge
 //!
 //! A source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant.
 //!
 //! This library provides:
 //! - Roon audio system control
 //! - HQPlayer upsampling engine control
-//! - Logitech Media Server (LMS) control
-//! - MQTT integration for Home Assistant
+//! - OpenHome / UPnP device control
 //! - Server-Sent Events for real-time updates
 //! - Web UI (Dioxus + Tailwind CSS + DioxusLabs components)
 

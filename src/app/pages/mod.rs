@@ -3,17 +3,13 @@
 //! These pages use Dioxus signals and server functions instead of inline JavaScript.
 
 mod ai_chat;
-mod hqplayer;
 mod knobs;
 mod library;
-mod lms;
 mod settings;
 mod zones;
 
 pub use ai_chat::AiChat;
-pub use hqplayer::HqPlayer;
 pub use knobs::Knobs;
 pub use library::Library;
-pub use lms::Lms;
 pub use settings::Settings;
 pub use zones::Zones;

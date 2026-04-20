@@ -19,8 +19,7 @@ use std::sync::Arc;
 
 /// All available adapters in the system.
 /// This is the single source of truth for what adapters exist.
-/// Note: "lms-cli" is a companion to "lms" and shares its enabled state.
-pub const AVAILABLE_ADAPTERS: &[&str] = &["roon", "lms", "lms-cli", "openhome", "upnp"];
+pub const AVAILABLE_ADAPTERS: &[&str] = &["roon", "upnp"];
 
 /// Registered adapter with its spawn function
 struct RegisteredAdapter {
@@ -74,10 +73,6 @@ impl AdapterCoordinator {
         for &name in AVAILABLE_ADAPTERS {
             let enabled = match name {
                 "roon" => settings.roon,
-                "lms" => settings.lms,
-                // lms-cli shares enabled state with lms (companion adapter)
-                "lms-cli" => settings.lms,
-                "openhome" => settings.openhome,
                 "upnp" => settings.upnp,
                 _ => false,
             };

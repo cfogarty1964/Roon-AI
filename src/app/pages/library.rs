@@ -1,5 +1,6 @@
 use crate::app::api::{BrowseItem, BrowseLoadResult, BrowseResult, ZonesResponse};
 use crate::app::components::Layout;
+use crate::app::default_zone::use_default_zone;
 use dioxus::prelude::*;
 
 const ALPHA_THRESHOLD: u32 = 26;
@@ -62,6 +63,7 @@ pub fn Library() -> Element {
     let mut selected_zone = use_signal(|| String::new());
     let mut play_msg = use_signal(|| None::<String>);
     let mut selected_letter = use_signal(|| None::<char>);
+    let default_zone_ctx = use_default_zone();
 
     let zones = use_resource(|| async {
         crate::app::api::fetch_json::<ZonesResponse>("/zones")
@@ -71,11 +73,14 @@ pub fn Library() -> Element {
             .unwrap_or_default()
     });
 
-    // Pre-select first Roon zone
+    // Pre-select default zone if stored, otherwise fall back to first Roon zone
     use_effect(move || {
         let zone_list = zones.read().clone().unwrap_or_default();
         if !zone_list.is_empty() && selected_zone.read().is_empty() {
-            if let Some(z) = zone_list.iter().find(|z| z.zone_id.starts_with("roon:")) {
+            let default = default_zone_ctx.get();
+            if !default.is_empty() && zone_list.iter().any(|z| z.zone_id == default) {
+                selected_zone.set(default);
+            } else if let Some(z) = zone_list.iter().find(|z| z.zone_id.starts_with("roon:")) {
                 selected_zone.set(z.zone_id.clone());
             } else if let Some(z) = zone_list.first() {
                 selected_zone.set(z.zone_id.clone());
@@ -214,6 +219,26 @@ pub fn Library() -> Element {
                                 value: "{zone.zone_id}",
                                 selected: zone.zone_id == *selected_zone.read(),
                                 "{zone.zone_name}"
+                            }
+                        }
+                    }
+                    {
+                        let is_default = *selected_zone.read() == default_zone_ctx.get();
+                        let star_zone = selected_zone.read().clone();
+                        rsx! {
+                            button {
+                                class: if is_default {
+                                    "text-yellow-400 hover:text-yellow-500 text-lg leading-none transition-colors"
+                                } else {
+                                    "text-muted hover:text-yellow-400 text-lg leading-none transition-colors"
+                                },
+                                title: if is_default { "Default zone (click to reconfirm)" } else { "Set as default zone" },
+                                onclick: move |_| {
+                                    if !star_zone.is_empty() {
+                                        default_zone_ctx.set(&star_zone);
+                                    }
+                                },
+                                if is_default { "★" } else { "☆" }
                             }
                         }
                     }

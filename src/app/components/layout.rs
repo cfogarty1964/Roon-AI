@@ -16,12 +16,6 @@ pub struct LayoutProps {
     pub nav_active: String,
     /// Page content
     pub children: Element,
-    /// Hide HQPlayer tab in nav
-    #[props(default = false)]
-    pub hide_hqp: bool,
-    /// Hide LMS tab in nav
-    #[props(default = false)]
-    pub hide_lms: bool,
     /// Hide Knobs tab in nav
     #[props(default = false)]
     pub hide_knobs: bool,
@@ -46,7 +40,7 @@ pub fn Layout(props: LayoutProps) -> Element {
             )
         }
     };
-    let full_title = format!("{} - Unified Hi-Fi Control", props.title);
+    let full_title = format!("{} - Roon AI", props.title);
 
     rsx! {
         // Head elements - Dioxus hoists these to the real <head>
@@ -74,15 +68,13 @@ pub fn Layout(props: LayoutProps) -> Element {
         // Body content
         Nav {
             active: props.nav_active.clone(),
-            hide_hqp: props.hide_hqp,
-            hide_lms: props.hide_lms,
             hide_knobs: props.hide_knobs,
         }
         main { class: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4 overflow-x-hidden",
             {props.children}
         }
         footer { class: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center py-3",
-            small { class: "text-muted", "Unified Hi-Fi Control v{version} ({git_sha})" }
+            small { class: "text-muted", "Roon AI v{version} ({git_sha})" }
         }
     }
 }

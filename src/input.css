@@ -251,4 +251,41 @@
   .btn-sm {
     @apply px-2 py-1 text-xs;
   }
+
+  /* AI chat markdown prose rendering */
+  .ai-prose {
+    @apply text-sm leading-relaxed;
+  }
+  .ai-prose p {
+    @apply mb-2 last:mb-0;
+  }
+  .ai-prose h1, .ai-prose h2, .ai-prose h3, .ai-prose h4 {
+    @apply font-semibold mt-3 mb-1;
+  }
+  .ai-prose h1 { @apply text-base; }
+  .ai-prose h2, .ai-prose h3, .ai-prose h4 { @apply text-sm; }
+  .ai-prose ul {
+    @apply list-disc list-outside pl-4 mb-2 space-y-0.5;
+  }
+  .ai-prose ol {
+    @apply list-decimal list-outside pl-4 mb-2 space-y-0.5;
+  }
+  .ai-prose li {
+    @apply text-sm;
+  }
+  .ai-prose strong { @apply font-semibold; }
+  .ai-prose em { @apply italic; }
+  .ai-prose hr {
+    @apply my-3;
+    border-color: var(--border-default);
+  }
+  .ai-prose code {
+    @apply text-xs px-1 rounded;
+    background: var(--surface-base);
+  }
+  .ai-prose blockquote {
+    @apply border-l-2 pl-3 italic my-2;
+    border-color: var(--border-default);
+    color: var(--text-muted);
+  }
 }

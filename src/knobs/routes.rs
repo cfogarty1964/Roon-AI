@@ -76,18 +76,6 @@ fn extract_knob_version(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// DSP info for zones linked to HQPlayer (iOS compatible)
-#[derive(Serialize, Clone)]
-pub struct DspInfo {
-    pub r#type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instance: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pipeline: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profiles: Option<String>,
-}
-
 /// Zone info for knob response - matches Node.js bus adapter format
 #[derive(Serialize, Clone)]
 pub struct ZoneInfo {
@@ -97,8 +85,6 @@ pub struct ZoneInfo {
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_control: Option<VolumeControl>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dsp: Option<DspInfo>,
 }
 
 /// GET /knob/zones response
@@ -119,32 +105,9 @@ pub async fn knob_zones_handler(
 /// Helper to aggregate zones from aggregator (respects adapter settings, public for UI module)
 pub async fn get_all_zones_internal(state: &AppState) -> Vec<ZoneInfo> {
     use crate::api::load_app_settings;
-    use std::collections::HashMap;
 
     let settings = load_app_settings();
     let adapters = settings.adapters;
-
-    // Get HQPlayer zone links for DSP field population
-    let hqp_links: HashMap<String, String> = state
-        .hqp_zone_links
-        .get_links()
-        .await
-        .into_iter()
-        .map(|l| (l.zone_id, l.instance))
-        .collect();
-
-    // Helper to create DspInfo if zone is linked to HQPlayer
-    let get_dsp = |zone_id: &str| -> Option<DspInfo> {
-        hqp_links.get(zone_id).map(|instance| DspInfo {
-            r#type: "hqplayer".to_string(),
-            instance: Some(instance.clone()),
-            pipeline: Some(format!(
-                "/hqp/pipeline?zone_id={}",
-                urlencoding::encode(zone_id)
-            )),
-            profiles: Some("/hqp/profiles".to_string()),
-        })
-    };
 
     // Get all zones from aggregator (already prefixed with source:)
     let all_zones = state.aggregator.get_zones().await;
@@ -156,20 +119,13 @@ pub async fn get_all_zones_internal(state: &AppState) -> Vec<ZoneInfo> {
             // Filter based on adapter settings
             if z.zone_id.starts_with("roon:") {
                 adapters.roon
-            } else if z.zone_id.starts_with("lms:") {
-                adapters.lms
-            } else if z.zone_id.starts_with("openhome:") {
-                adapters.openhome
             } else if z.zone_id.starts_with("upnp:") {
                 adapters.upnp
-            } else if z.zone_id.starts_with("hqp:") {
-                adapters.hqplayer
             } else {
                 true // Unknown prefix, include by default
             }
         })
         .map(|z| ZoneInfo {
-            dsp: get_dsp(&z.zone_id),
             zone_id: z.zone_id,
             zone_name: z.zone_name,
             source: z.source,
@@ -325,10 +281,7 @@ pub async fn knob_now_playing_handler(
     let settings = load_app_settings();
     let adapter_enabled = match zone.source.as_str() {
         "roon" => settings.adapters.roon,
-        "lms" => settings.adapters.lms,
-        "openhome" => settings.adapters.openhome,
         "upnp" => settings.adapters.upnp,
-        "hqplayer" => settings.adapters.hqplayer,
         _ => true,
     };
 
@@ -530,15 +483,7 @@ pub async fn knob_control_handler(
     Json(req): Json<KnobControlRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     // Route based on zone_id prefix
-    if req.zone_id.starts_with("lms:") {
-        // LMS player control
-        let player_id = req.zone_id.trim_start_matches("lms:");
-        return control_lms(&state, player_id, &req.action, req.value.as_ref()).await;
-    } else if req.zone_id.starts_with("openhome:") {
-        // OpenHome zone control
-        let udn = req.zone_id.trim_start_matches("openhome:");
-        return control_openhome(&state, udn, &req.action).await;
-    } else if req.zone_id.starts_with("upnp:") {
+    if req.zone_id.starts_with("upnp:") {
         // UPnP zone control
         let udn = req.zone_id.trim_start_matches("upnp:");
         return control_upnp(&state, udn, &req.action).await;
@@ -629,118 +574,6 @@ async fn control_roon(
     };
 
     match state.roon.control(zone_id, roon_action).await {
-        Ok(()) => Ok(Json(serde_json::json!({"ok": true}))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )),
-    }
-}
-
-/// Control LMS player
-async fn control_lms(
-    state: &AppState,
-    player_id: &str,
-    action: &str,
-    value: Option<&serde_json::Value>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let lms_action = match action {
-        "play" => "play",
-        "pause" => "pause",
-        "play_pause" | "playpause" => "pause", // LMS uses pause to toggle
-        "next" => "next",
-        "previous" | "prev" => "prev",
-        "stop" => "stop",
-        "vol_up" | "volume_up" => {
-            // Use provided value, or look up zone's actual step from aggregator
-            let step = match value.and_then(|v| v.as_f64()) {
-                Some(v) => v as f32,
-                None => get_zone_step(state, &format!("lms:{}", player_id)).await,
-            };
-            state
-                .lms
-                .change_volume(player_id, step, true)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    )
-                })?;
-            return Ok(Json(serde_json::json!({"ok": true})));
-        }
-        "vol_down" | "volume_down" => {
-            // Use provided value, or look up zone's actual step from aggregator
-            let step = match value.and_then(|v| v.as_f64()) {
-                Some(v) => v as f32,
-                None => get_zone_step(state, &format!("lms:{}", player_id)).await,
-            };
-            state
-                .lms
-                .change_volume(player_id, -step, true)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    )
-                })?;
-            return Ok(Json(serde_json::json!({"ok": true})));
-        }
-        "vol_abs" | "volume" => {
-            // Use as_f64() which handles both JSON integers and floats
-            let vol = value.and_then(|v| v.as_f64()).unwrap_or(50.0) as f32;
-            state
-                .lms
-                .change_volume(player_id, vol, false)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": e.to_string()})),
-                    )
-                })?;
-            return Ok(Json(serde_json::json!({"ok": true})));
-        }
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Unknown action: {}", action)})),
-            ));
-        }
-    };
-
-    match state.lms.control(player_id, lms_action, None).await {
-        Ok(()) => Ok(Json(serde_json::json!({"ok": true}))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )),
-    }
-}
-
-/// Control OpenHome zone
-async fn control_openhome(
-    state: &AppState,
-    zone_id: &str,
-    action: &str,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let oh_action = match action {
-        "play" => "play",
-        "pause" => "pause",
-        "play_pause" | "playpause" => "pause", // OpenHome uses pause to toggle
-        "next" => "next",
-        "previous" | "prev" => "previous",
-        "stop" => "stop",
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Unknown action: {}", action)})),
-            ));
-        }
-    };
-
-    match state.openhome.control(zone_id, oh_action, None).await {
         Ok(()) => Ok(Json(serde_json::json!({"ok": true}))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1196,7 +1029,6 @@ mod tests {
             source: "test".to_string(),
             state: "stopped".to_string(),
             volume_control: None,
-            dsp: None,
         }
     }
 

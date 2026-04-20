@@ -26,19 +26,6 @@ pub struct RoonStatus {
     pub core_version: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpStatus {
-    pub connected: bool,
-    pub host: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct LmsStatus {
-    pub connected: bool,
-    pub host: Option<String>,
-    pub port: Option<u16>,
-}
-
 // =============================================================================
 // Settings Types
 // =============================================================================
@@ -46,11 +33,7 @@ pub struct LmsStatus {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct AdapterSettings {
     pub roon: bool,
-    pub lms: bool,
-    pub openhome: bool,
     pub upnp: bool,
-    #[serde(default)]
-    pub hqplayer: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -58,10 +41,6 @@ pub struct AppSettings {
     pub adapters: AdapterSettings,
     #[serde(default)]
     pub hide_knobs_page: bool,
-    #[serde(default)]
-    pub hide_hqp_page: bool,
-    #[serde(default)]
-    pub hide_lms_page: bool,
 }
 
 // =============================================================================
@@ -97,131 +76,10 @@ pub struct NowPlaying {
     pub is_playing: bool,
     pub volume: Option<f32>,
     pub volume_type: Option<String>,
-    /// Volume step size (e.g., 0.5 for Roon, 2.5 for LMS)
+    /// Volume step size (e.g., 0.5 for Roon)
     pub volume_step: Option<f32>,
     pub is_previous_allowed: bool,
     pub is_next_allowed: bool,
-}
-
-// =============================================================================
-// LMS Types
-// =============================================================================
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct LmsConfig {
-    pub configured: bool,
-    pub connected: bool,
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    /// Whether CLI subscription is active (real-time events vs polling-only)
-    #[serde(default)]
-    pub cli_subscription_active: bool,
-    /// Current poll interval in seconds (2s when CLI down, 30s when CLI up)
-    #[serde(default)]
-    pub poll_interval_secs: u64,
-}
-
-/// Wrapper for /lms/players response
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct LmsPlayersResponse {
-    pub players: Vec<LmsPlayer>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct LmsPlayer {
-    /// Player ID (MAC address) - API returns "playerid" field
-    #[serde(alias = "playerid")]
-    pub player_id: String,
-    pub name: String,
-    pub mode: String,
-    /// Current track title - API returns "title" field
-    #[serde(alias = "title")]
-    pub current_title: Option<String>,
-    pub artist: Option<String>,
-    pub volume: i32,
-}
-
-// =============================================================================
-// HQPlayer Types
-// =============================================================================
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpConfig {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    pub web_port: Option<u16>,
-    #[serde(default)]
-    pub has_web_credentials: bool,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpPipeline {
-    pub status: Option<HqpPipelineStatus>,
-    pub volume: Option<HqpVolume>,
-    pub settings: Option<HqpSettings>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpPipelineStatus {
-    pub state: Option<String>,
-    pub active_mode: Option<String>,
-    pub active_filter: Option<String>,
-    pub active_shaper: Option<String>,
-    pub active_rate: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpVolume {
-    pub value: Option<i32>,
-    pub min: Option<i32>,
-    pub max: Option<i32>,
-    pub is_fixed: bool,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpSettings {
-    pub mode: Option<HqpSettingOptions>,
-    pub samplerate: Option<HqpSettingOptions>,
-    pub filter1x: Option<HqpSettingOptions>,
-    #[serde(rename = "filterNx")]
-    pub filter_nx: Option<HqpSettingOptions>,
-    pub shaper: Option<HqpSettingOptions>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpSettingOptions {
-    pub options: Vec<HqpOption>,
-    pub selected: Option<HqpOption>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpOption {
-    pub value: String,
-    pub label: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpProfile {
-    pub name: Option<String>,
-    pub title: Option<String>,
-    pub value: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpProfilesResponse {
-    pub profiles: Vec<HqpProfile>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpMatrixProfile {
-    pub index: u32,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct HqpMatrixProfilesResponse {
-    pub profiles: Vec<HqpMatrixProfile>,
-    pub current: Option<u32>,
 }
 
 // =============================================================================

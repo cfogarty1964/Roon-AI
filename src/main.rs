@@ -39,7 +39,7 @@ mod server {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Flash Knob - Unified Hi-Fi Control</title>
+    <title>Flash Knob - Roon AI</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
 </head>
 <body class="container">
@@ -77,7 +77,7 @@ mod server {
             .init();
 
         tracing::info!(
-            "Starting Unified Hi-Fi Control (Rust) v{} ({})",
+            "Starting Roon AI v{} ({})",
             env!("UHC_VERSION"),
             env!("UHC_GIT_SHA")
         );
@@ -138,78 +138,6 @@ mod server {
             knob_store.clone(),
         ));
 
-        // HQPlayer instance manager (multi-instance support, no settings toggle)
-        let hqp_instances = Arc::new(adapters::hqplayer::HqpInstanceManager::new(bus.clone()));
-        hqp_instances.load_from_config().await;
-        let instance_count = hqp_instances.instance_count().await;
-        if instance_count > 0 {
-            tracing::info!(
-                "HQPlayer: {} instance(s) loaded from config",
-                instance_count
-            );
-        }
-
-        // Create default HQPlayer adapter for backward compatibility
-        let hqplayer = hqp_instances.get_default().await;
-        if let Some(ref hqp_config) = config.hqplayer {
-            hqplayer
-                .configure(
-                    hqp_config.host.clone(),
-                    Some(hqp_config.port),
-                    None,
-                    hqp_config.username.clone(),
-                    hqp_config.password.clone(),
-                )
-                .await;
-            hqp_instances.save_to_config().await;
-            tracing::info!(
-                "HQPlayer default instance configured for {}",
-                hqp_config.host
-            );
-        } else if hqplayer.is_configured().await {
-            let status = hqplayer.get_status().await;
-            if let Some(host) = status.host {
-                tracing::info!("HQPlayer default instance: {}:{}", host, status.port);
-            }
-        }
-
-        // Auto-connect HQPlayer if configured (establishes TCP connection at startup)
-        if hqplayer.is_configured().await {
-            match hqplayer.get_pipeline_status().await {
-                Ok(_) => tracing::info!("HQPlayer auto-connected at startup"),
-                Err(e) => tracing::warn!(
-                    "HQPlayer auto-connect failed (will retry on page access): {}",
-                    e
-                ),
-            }
-        }
-
-        // HQP zone link service
-        let hqp_zone_links = Arc::new(adapters::hqplayer::HqpZoneLinkService::new(
-            hqp_instances.clone(),
-        ));
-        hqp_zone_links.auto_correct_links().await;
-        let link_count = hqp_zone_links.get_links().await.len();
-        if link_count > 0 {
-            tracing::info!("HQPlayer: {} zone link(s) active", link_count);
-        }
-
-        // LMS adapters (polling + CLI subscription with shared state)
-        // Issue #165: Split into two adapters with independent retry
-        let (lms, lms_cli) = adapters::lms::create_lms_adapters(bus.clone());
-        if let Some(ref lms_config) = config.lms {
-            lms.configure(
-                lms_config.host.clone(),
-                Some(lms_config.port),
-                lms_config.username.clone(),
-                lms_config.password.clone(),
-            )
-            .await;
-        }
-
-        // OpenHome adapter
-        let openhome = Arc::new(adapters::openhome::OpenHomeAdapter::new(bus.clone()));
-
         // UPnP adapter
         let upnp = Arc::new(adapters::upnp::UPnPAdapter::new(bus.clone()));
 
@@ -218,12 +146,8 @@ mod server {
         // =========================================================================
 
         // Build list of startable adapters
-        // Note: lms_cli shares config with lms - both start when LMS is configured
         let startable_adapters: Vec<Arc<dyn adapters::Startable>> = vec![
             roon.clone(),
-            lms.clone(),
-            lms_cli.clone(),
-            openhome.clone(),
             upnp.clone(),
         ];
 
@@ -255,11 +179,6 @@ mod server {
         // Build application state (clone Arcs so we can access adapters for shutdown)
         let state = api::AppState::new(
             roon,
-            hqplayer,
-            hqp_instances,
-            hqp_zone_links,
-            lms.clone(),
-            openhome.clone(),
             upnp.clone(),
             knob_store,
             bus.clone(),
@@ -295,87 +214,6 @@ mod server {
             .route("/roon/browse", post(api::roon_browse_handler))
             .route("/roon/browse/load", post(api::roon_browse_load_handler))
             .route("/roon/browse/status", get(api::roon_browse_status_handler))
-            // HQPlayer routes
-            .route("/hqplayer/status", get(api::hqp_status_handler))
-            .route("/hqplayer/pipeline", get(api::hqp_pipeline_handler))
-            .route("/hqplayer/control", post(api::hqp_control_handler))
-            .route("/hqplayer/volume", post(api::hqp_volume_handler))
-            .route("/hqplayer/setting", post(api::hqp_setting_handler))
-            .route("/hqplayer/profiles", get(api::hqp_profiles_handler))
-            .route("/hqplayer/profile", post(api::hqp_load_profile_handler))
-            // HQPlayer Matrix profile routes
-            .route(
-                "/hqplayer/matrix/profiles",
-                get(api::hqp_matrix_profiles_handler),
-            )
-            .route(
-                "/hqplayer/matrix/profile",
-                post(api::hqp_set_matrix_profile_handler),
-            )
-            // HQPlayer config routes
-            .route("/hqplayer/config", get(api::hqp_config_handler))
-            .route("/hqplayer/configure", post(api::hqp_configure_handler))
-            .route("/hqp/detect", post(api::hqp_detect_handler))
-            // HQPlayer pipeline POST route (iOS compatible)
-            .route("/hqp/pipeline", get(api::hqp_pipeline_handler))
-            .route("/hqp/pipeline", post(api::hqp_pipeline_update_handler))
-            // HQPlayer status route (iOS uses /hqp/status)
-            .route("/hqp/status", get(api::hqp_status_handler))
-            // HQPlayer profiles route (iOS uses /hqp/profiles)
-            .route("/hqp/profiles", get(api::hqp_profiles_handler))
-            .route("/hqp/profiles/load", post(api::hqp_load_profile_handler))
-            // HQPlayer multi-instance routes
-            .route("/hqp/instances", get(api::hqp_instances_handler))
-            .route("/hqp/instances", post(api::hqp_add_instance_handler))
-            .route(
-                "/hqp/instances/{name}",
-                delete(api::hqp_remove_instance_handler),
-            )
-            // HQPlayer instance-specific profile routes (web UI profiles via HTTP)
-            .route(
-                "/hqp/instances/{name}/profiles",
-                get(api::hqp_instance_profiles_handler),
-            )
-            .route(
-                "/hqp/instances/{name}/profile",
-                post(api::hqp_instance_load_profile_handler),
-            )
-            // HQPlayer instance-specific matrix profile routes (native TCP protocol)
-            .route(
-                "/hqp/instances/{name}/matrix/profiles",
-                get(api::hqp_instance_matrix_profiles_handler),
-            )
-            .route(
-                "/hqp/instances/{name}/matrix/profile",
-                post(api::hqp_instance_set_matrix_profile_handler),
-            )
-            // HQPlayer zone linking routes
-            .route("/hqp/zones/links", get(api::hqp_zone_links_handler))
-            .route("/hqp/zones/link", post(api::hqp_zone_link_handler))
-            .route("/hqp/zones/unlink", post(api::hqp_zone_unlink_handler))
-            .route(
-                "/hqp/zones/{zone_id}/pipeline",
-                get(api::hqp_zone_pipeline_handler),
-            )
-            // HQPlayer network discovery
-            .route("/hqp/discover", get(api::hqp_discover_handler))
-            // LMS routes
-            .route("/lms/status", get(api::lms_status_handler))
-            .route("/lms/config", get(api::lms_config_handler))
-            .route("/lms/configure", post(api::lms_configure_handler))
-            .route("/lms/players", get(api::lms_players_handler))
-            .route("/lms/player/{player_id}", get(api::lms_player_handler))
-            .route("/lms/control", post(api::lms_control_handler))
-            .route("/lms/volume", post(api::lms_volume_handler))
-            .route("/lms/discover", get(api::lms_discover_handler))
-            // OpenHome routes
-            .route("/openhome/status", get(api::openhome_status_handler))
-            .route("/openhome/zones", get(api::openhome_zones_handler))
-            .route(
-                "/openhome/zone/{zone_id}/now_playing",
-                get(api::openhome_now_playing_handler),
-            )
-            .route("/openhome/control", post(api::openhome_control_handler))
             // UPnP routes
             .route("/upnp/status", get(api::upnp_status_handler))
             .route("/upnp/zones", get(api::upnp_zones_handler))
@@ -493,7 +331,7 @@ mod server {
         tracing::info!("Listening on http://{}", addr);
 
         // Advertise via mDNS for knob discovery
-        let _mdns = match mdns::advertise(config.port, "Unified Hi-Fi Control", &base_url) {
+        let _mdns = match mdns::advertise(config.port, "Roon AI", &base_url) {
             Ok(daemon) => {
                 tracing::info!("mDNS advertising started");
                 Some(daemon)
@@ -571,8 +409,6 @@ mod server {
         if let Some(ref fw) = firmware_service {
             fw.stop();
         }
-        lms.stop().await;
-        openhome.stop().await;
         upnp.stop().await;
         tracing::info!("Shutdown complete");
 
@@ -628,7 +464,7 @@ async fn main() -> anyhow::Result<()> {
         );
         println!();
         println!(
-            "Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer, and hardware knobs."
+            "Source-agnostic hi-fi control bridge for Roon, UPnP, and hardware knobs."
         );
         println!();
         println!("USAGE:");
@@ -642,8 +478,6 @@ async fn main() -> anyhow::Result<()> {
         println!("    PORT             HTTP server port (default: 8088)");
         println!("    CONFIG_DIR       Configuration directory");
         println!("    LOG_LEVEL        Log level (debug, info, warn, error)");
-        println!("    LMS_HOST         LMS server host (auto-enables LMS backend)");
-        println!("    LMS_PORT         LMS server port (default: 9000)");
         return Ok(());
     }
 

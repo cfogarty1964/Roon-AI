@@ -12,12 +12,6 @@ pub struct Config {
     pub roon: RoonConfig,
 
     #[serde(default)]
-    pub hqplayer: Option<HqpConfig>,
-
-    #[serde(default)]
-    pub lms: Option<LmsConfig>,
-
-    #[serde(default)]
     pub ai: Option<AiConfig>,
 }
 
@@ -44,32 +38,6 @@ pub struct RoonConfig {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct HqpConfig {
-    pub host: String,
-    #[serde(default = "default_hqp_port")]
-    pub port: u16,
-    pub username: Option<String>,
-    pub password: Option<String>,
-}
-
-fn default_hqp_port() -> u16 {
-    8088
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LmsConfig {
-    pub host: String,
-    #[serde(default = "default_lms_port")]
-    pub port: u16,
-    pub username: Option<String>,
-    pub password: Option<String>,
-}
-
-fn default_lms_port() -> u16 {
-    9000
-}
-
 /// Subdirectory name for unified-hifi config files
 /// Issue #76: Organize config files into a subdirectory to avoid clutter
 const CONFIG_SUBDIR_NAME: &str = "unified-hifi";
@@ -77,9 +45,6 @@ const CONFIG_SUBDIR_NAME: &str = "unified-hifi";
 /// Config files that should be migrated to the subdirectory
 const MIGRATABLE_CONFIG_FILES: &[&str] = &[
     "app-settings.json",
-    "lms-config.json",
-    "hqp-config.json",
-    "hqp-zone-links.json",
     "roon_state.json",
     "knobs.json",
 ];
@@ -278,14 +243,6 @@ pub fn get_data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("./data")
 }
 
-/// Check if started from LMS UnifiedHiFi plugin (explicit signal)
-/// The LMS plugin sets LMS_UNIFIEDHIFI_STARTED=true when launching the bridge
-pub fn is_lms_plugin_started() -> bool {
-    std::env::var("LMS_UNIFIEDHIFI_STARTED")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
-}
-
 pub fn load_config() -> Result<Config> {
     let config_dir = get_config_dir();
 
@@ -316,16 +273,6 @@ pub fn load_config() -> Result<Config> {
         }
     }
 
-    // Support legacy LMS_HOST/LMS_PORT env vars (used by LMS plugin Helper.pm)
-    if let Ok(host) = std::env::var("LMS_HOST") {
-        builder = builder.set_override("lms.host", host)?;
-    }
-    if let Ok(port) = std::env::var("LMS_PORT") {
-        if let Ok(port_num) = port.parse::<u16>() {
-            builder = builder.set_override("lms.port", port_num as i64)?;
-        }
-    }
-
     let config = builder.build()?;
 
     Ok(config.try_deserialize()?)
@@ -349,9 +296,6 @@ pub fn migrate_nodejs_configs() {
 
     // Migrate Roon config (roon-config.json → roon_state.json)
     migrate_roon_config(&data_dir);
-
-    // Migrate HQPlayer config (adjust port mapping)
-    migrate_hqp_config(&data_dir);
 
     tracing::debug!("Node.js config migration check complete");
 }
@@ -409,62 +353,6 @@ mod tests {
                 None => env::remove_var(self.key),
             }
         }
-    }
-
-    #[test]
-    #[serial]
-    fn test_lms_host_env_enables_lms_config() {
-        // When LMS_HOST is set, config.lms should be Some
-        // This simulates the LMS plugin starting the bridge with LMS_HOST=127.0.0.1
-        let _g1 = EnvGuard::set("LMS_HOST", "127.0.0.1");
-        let _g2 = EnvGuard::set("UHC_CONFIG_DIR", "/tmp/uhc-test-nonexistent");
-
-        let config = load_config().expect("config should load");
-
-        // The key assertion: LMS should be configured when LMS_HOST is set
-        assert!(
-            config.lms.is_some(),
-            "config.lms should be Some when LMS_HOST env var is set"
-        );
-
-        let lms = config.lms.unwrap();
-        assert_eq!(lms.host, "127.0.0.1");
-        assert_eq!(lms.port, 9000); // default port
-    }
-
-    #[test]
-    #[serial]
-    fn test_lms_host_and_port_env() {
-        let _g1 = EnvGuard::set("LMS_HOST", "192.168.1.100");
-        let _g2 = EnvGuard::set("LMS_PORT", "9001");
-        let _g3 = EnvGuard::set("UHC_CONFIG_DIR", "/tmp/uhc-test-nonexistent");
-
-        let config = load_config().expect("config should load");
-
-        assert!(config.lms.is_some());
-        let lms = config.lms.unwrap();
-        assert_eq!(lms.host, "192.168.1.100");
-        assert_eq!(lms.port, 9001);
-    }
-
-    #[test]
-    #[serial]
-    fn test_lms_plugin_started_detection() {
-        // Test the helper function that checks if started from LMS plugin
-        {
-            let _g = EnvGuard::set("LMS_UNIFIEDHIFI_STARTED", "true");
-            assert!(is_lms_plugin_started());
-        }
-        {
-            let _g = EnvGuard::set("LMS_UNIFIEDHIFI_STARTED", "1");
-            assert!(is_lms_plugin_started());
-        }
-        {
-            let _g = EnvGuard::set("LMS_UNIFIEDHIFI_STARTED", "false");
-            assert!(!is_lms_plugin_started());
-        }
-        // Without env var
-        assert!(!is_lms_plugin_started());
     }
 
     #[test]
@@ -547,7 +435,7 @@ mod tests {
         let config_dir = temp_dir.path();
 
         // Create test config files at root level
-        let files = ["app-settings.json", "lms-config.json", "hqp-config.json"];
+        let files = ["app-settings.json"];
         for file in &files {
             std::fs::write(config_dir.join(file), r#"{"test": true}"#).expect("write file");
         }
@@ -682,62 +570,3 @@ mod tests {
     }
 }
 
-/// Migrate HQPlayer config from Node.js format
-fn migrate_hqp_config(data_dir: &std::path::Path) {
-    let hqp_path = data_dir.join("hqp-config.json");
-
-    if !hqp_path.exists() {
-        return;
-    }
-
-    // Read the existing config
-    let content = match std::fs::read_to_string(&hqp_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    // Check if it's Node.js format (single object without web_port field)
-    // Node.js format: {"host":"...", "port":8088, "username":"...", "password":"..."}
-    // Rust format: {"host":"...", "port":4321, "web_port":8088, ...} or array format
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
-        // Skip if already migrated (has web_port or is array format)
-        if value.is_array() {
-            return;
-        }
-        if value.get("web_port").is_some() {
-            return;
-        }
-
-        // It's Node.js single-object format - convert it
-        if let Some(obj) = value.as_object() {
-            let host = obj.get("host").and_then(|v| v.as_str()).unwrap_or("");
-            let nodejs_port = obj.get("port").and_then(|v| v.as_u64()).unwrap_or(8088) as u16;
-            let username = obj.get("username").and_then(|v| v.as_str());
-            let password = obj.get("password").and_then(|v| v.as_str());
-
-            // In Node.js, "port" is the web UI port (8088)
-            // In Rust, "port" is the native protocol port (4321), "web_port" is web UI
-            let rust_config = serde_json::json!([{
-                "name": "default",
-                "host": host,
-                "port": 4321,  // Native protocol port
-                "web_port": nodejs_port,  // Node.js port becomes web_port
-                "username": username,
-                "password": password
-            }]);
-
-            if let Ok(json) = serde_json::to_string_pretty(&rust_config) {
-                match std::fs::write(&hqp_path, &json) {
-                    Ok(()) => {
-                        tracing::info!(
-                            "Migrated HQPlayer config from Node.js format (port {} → web_port {})",
-                            nodejs_port,
-                            nodejs_port
-                        );
-                    }
-                    Err(e) => tracing::warn!("Failed to write migrated HQP config: {}", e),
-                }
-            }
-        }
-    }
-}

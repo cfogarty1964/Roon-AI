@@ -1,7 +1,7 @@
 //! Extended event types for the unified event bus architecture.
 //!
 //! This module defines comprehensive event types that abstract across
-//! different audio sources (Roon, LMS, HQPlayer, etc.) into a unified
+//! different audio sources (Roon, UPnP, etc.) into a unified
 //! zone-based model.
 
 use serde::{Deserialize, Serialize};
@@ -32,31 +32,16 @@ impl PrefixedZoneId {
         Self(format!("roon:{}", raw_id.as_ref()))
     }
 
-    /// Create an LMS zone ID
-    pub fn lms(raw_id: impl AsRef<str>) -> Self {
-        Self(format!("lms:{}", raw_id.as_ref()))
-    }
-
-    /// Create an OpenHome zone ID
-    pub fn openhome(raw_id: impl AsRef<str>) -> Self {
-        Self(format!("openhome:{}", raw_id.as_ref()))
-    }
-
     /// Create a UPnP zone ID
     pub fn upnp(raw_id: impl AsRef<str>) -> Self {
         Self(format!("upnp:{}", raw_id.as_ref()))
-    }
-
-    /// Create a HQPlayer zone ID
-    pub fn hqplayer(raw_id: impl AsRef<str>) -> Self {
-        Self(format!("hqplayer:{}", raw_id.as_ref()))
     }
 
     /// Parse a prefixed zone ID from a string.
     /// Returns None if the string doesn't contain a valid prefix.
     pub fn parse(s: impl AsRef<str>) -> Option<Self> {
         let s = s.as_ref();
-        let valid_prefixes = ["roon:", "lms:", "openhome:", "upnp:", "hqplayer:"];
+        let valid_prefixes = ["roon:", "upnp:"];
         if valid_prefixes.iter().any(|p| s.starts_with(p)) {
             Some(Self(s.to_string()))
         } else {
@@ -573,32 +558,6 @@ pub enum BusEvent {
     /// Roon Core disconnected (legacy)
     RoonDisconnected,
 
-    /// HQPlayer connected (legacy)
-    HqpConnected { host: String },
-
-    /// HQPlayer disconnected (legacy)
-    HqpDisconnected { host: String },
-
-    /// HQPlayer state changed (legacy)
-    HqpStateChanged { host: String, state: String },
-
-    /// HQPlayer pipeline changed (legacy)
-    HqpPipelineChanged {
-        host: String,
-        filter: Option<String>,
-        shaper: Option<String>,
-        rate: Option<String>,
-    },
-
-    /// LMS connected (legacy)
-    LmsConnected { host: String },
-
-    /// LMS disconnected (legacy)
-    LmsDisconnected { host: String },
-
-    /// LMS player state changed (legacy)
-    LmsPlayerStateChanged { player_id: String, state: String },
-
     /// Control command from external source (legacy, for MQTT/HA)
     ControlCommand {
         zone_id: String,
@@ -628,13 +587,6 @@ impl BusEvent {
             Self::HealthCheck { .. } => "health_check",
             Self::RoonConnected { .. } => "roon_connected",
             Self::RoonDisconnected => "roon_disconnected",
-            Self::HqpConnected { .. } => "hqp_connected",
-            Self::HqpDisconnected { .. } => "hqp_disconnected",
-            Self::HqpStateChanged { .. } => "hqp_state_changed",
-            Self::HqpPipelineChanged { .. } => "hqp_pipeline_changed",
-            Self::LmsConnected { .. } => "lms_connected",
-            Self::LmsDisconnected { .. } => "lms_disconnected",
-            Self::LmsPlayerStateChanged { .. } => "lms_player_state_changed",
             Self::ControlCommand { .. } => "control_command",
         }
     }
@@ -681,18 +633,7 @@ impl BusEvent {
 
     /// Check if this is a legacy event
     pub fn is_legacy_event(&self) -> bool {
-        matches!(
-            self,
-            Self::RoonConnected { .. }
-                | Self::RoonDisconnected
-                | Self::HqpConnected { .. }
-                | Self::HqpDisconnected { .. }
-                | Self::HqpStateChanged { .. }
-                | Self::HqpPipelineChanged { .. }
-                | Self::LmsConnected { .. }
-                | Self::LmsDisconnected { .. }
-                | Self::LmsPlayerStateChanged { .. }
-        )
+        matches!(self, Self::RoonConnected { .. } | Self::RoonDisconnected)
     }
 }
 
@@ -769,30 +710,20 @@ mod tests {
         assert_eq!(roon.source(), "roon");
         assert_eq!(roon.raw_id(), "abc123");
 
-        let lms = PrefixedZoneId::lms("00:11:22:33:44:55");
-        assert_eq!(lms.as_str(), "lms:00:11:22:33:44:55");
-
-        let openhome = PrefixedZoneId::openhome("uuid-here");
-        assert_eq!(openhome.as_str(), "openhome:uuid-here");
-
         let upnp = PrefixedZoneId::upnp("device-id");
         assert_eq!(upnp.as_str(), "upnp:device-id");
-
-        let hqp = PrefixedZoneId::hqplayer("instance");
-        assert_eq!(hqp.as_str(), "hqplayer:instance");
     }
 
     #[test]
     fn test_prefixed_zone_id_parse() {
         // Valid prefixes
         assert!(PrefixedZoneId::parse("roon:abc").is_some());
-        assert!(PrefixedZoneId::parse("lms:abc").is_some());
-        assert!(PrefixedZoneId::parse("openhome:abc").is_some());
         assert!(PrefixedZoneId::parse("upnp:abc").is_some());
-        assert!(PrefixedZoneId::parse("hqplayer:abc").is_some());
 
         // Invalid - no prefix
         assert!(PrefixedZoneId::parse("abc123").is_none());
         assert!(PrefixedZoneId::parse("unknown:abc").is_none());
+        assert!(PrefixedZoneId::parse("openhome:abc").is_none());
+        assert!(PrefixedZoneId::parse("hqplayer:abc").is_none());
     }
 }

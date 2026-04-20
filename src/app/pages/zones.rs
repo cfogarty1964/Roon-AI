@@ -2,8 +2,8 @@
 //!
 //! Shows all available zones using Dioxus resources.
 
-use crate::app::api::{HqpMatrixProfilesResponse, HqpProfile, NowPlaying, Zone, ZonesResponse};
-use crate::app::components::{ErrorAlert, HqpControlsCompact, Layout, VolumeControlsCompact};
+use crate::app::api::{NowPlaying, Zone, ZonesResponse};
+use crate::app::components::{Layout, VolumeControlsCompact};
 use crate::app::sse::{use_sse, SseEvent};
 use dioxus::prelude::*;
 use std::collections::HashMap;
@@ -87,20 +87,14 @@ pub fn Zones() -> Element {
                     | SseEvent::ZoneRemoved { .. }
                     | SseEvent::RoonConnected
                     | SseEvent::RoonDisconnected
-                    | SseEvent::LmsConnected
-                    | SseEvent::LmsDisconnected
             )
         ) {
             zones.restart();
         }
 
         // Refresh now_playing on playback/volume changes
-        // Use selective per-zone fetching to avoid race conditions when multiple
-        // zones update rapidly (fixes issue #109 - wrong album art display)
         if let Some(ref evt) = event {
             match evt {
-                // Zone-scoped events: fetch only the specific zone that changed
-                // ZoneUpdated includes state changes (play/pause) that affect is_playing
                 SseEvent::NowPlayingChanged { .. } | SseEvent::ZoneUpdated { .. } => {
                     if let Some(zone_id) = evt.zone_id() {
                         let zone_id = zone_id.to_string();
@@ -113,9 +107,7 @@ pub fn Zones() -> Element {
                         });
                     }
                 }
-                // Volume/LMS events: fetch all zones and merge atomically
-                // (output_id/player_id don't map directly to zone_id)
-                SseEvent::VolumeChanged { .. } | SseEvent::LmsPlayerStateChanged { .. } => {
+                SseEvent::VolumeChanged { .. } => {
                     let zone_list = zones_list_signal();
                     if !zone_list.is_empty() {
                         spawn(async move {
@@ -128,7 +120,6 @@ pub fn Zones() -> Element {
                         });
                     }
                 }
-                // SeekPositionChanged doesn't affect track/artist/album art - no fetch needed
                 _ => {}
             }
         }
@@ -151,86 +142,6 @@ pub fn Zones() -> Element {
         });
     };
 
-    // HQPlayer state (shared across all HQP zones)
-    let mut hqp_profiles = use_signal(Vec::<HqpProfile>::new);
-    let mut hqp_matrix = use_signal(|| None::<HqpMatrixProfilesResponse>);
-    let mut hqp_error = use_signal(|| None::<String>);
-
-    // Check if any zone has HQP
-    let has_any_hqp = use_memo(move || {
-        zones_list_signal().iter().any(|z| {
-            z.dsp
-                .as_ref()
-                .map(|d| d.r#type.as_deref() == Some("hqplayer"))
-                .unwrap_or(false)
-        })
-    });
-
-    // Fetch HQP profiles/matrix when there are HQP zones
-    use_effect(move || {
-        if has_any_hqp() {
-            spawn(async move {
-                if let Ok(profiles) =
-                    crate::app::api::fetch_json::<Vec<HqpProfile>>("/hqplayer/profiles").await
-                {
-                    hqp_profiles.set(profiles);
-                }
-                if let Ok(matrix) = crate::app::api::fetch_json::<HqpMatrixProfilesResponse>(
-                    "/hqplayer/matrix/profiles",
-                )
-                .await
-                {
-                    hqp_matrix.set(Some(matrix));
-                }
-            });
-        }
-    });
-
-    // Load profile handler
-    let load_profile = move |profile: String| {
-        hqp_error.set(None);
-        spawn(async move {
-            #[derive(serde::Serialize)]
-            struct ProfileRequest {
-                profile: String,
-            }
-            let req = ProfileRequest { profile };
-            if let Err(e) = crate::app::api::post_json_no_response("/hqplayer/profile", &req).await
-            {
-                hqp_error.set(Some(format!("Profile load failed: {e}")));
-            }
-        });
-    };
-
-    // Set matrix profile handler
-    let set_matrix = move |profile_idx: u32| {
-        hqp_error.set(None);
-        spawn(async move {
-            #[derive(serde::Serialize)]
-            struct MatrixRequest {
-                profile: u32,
-            }
-            let req = MatrixRequest {
-                profile: profile_idx,
-            };
-            match crate::app::api::post_json_no_response("/hqplayer/matrix/profile", &req).await {
-                Ok(_) => {
-                    // Refresh matrix after change
-                    if let Ok(matrix) = crate::app::api::fetch_json::<HqpMatrixProfilesResponse>(
-                        "/hqplayer/matrix/profiles",
-                    )
-                    .await
-                    {
-                        hqp_matrix.set(Some(matrix));
-                    }
-                }
-                Err(e) => {
-                    hqp_error.set(Some(format!("Matrix profile failed: {e}")));
-                }
-            }
-        });
-    };
-
     let is_loading = zones.read().is_none();
     let zones_list = zones
         .read()
@@ -240,9 +151,6 @@ pub fn Zones() -> Element {
         .unwrap_or_default();
     let np_map = now_playing();
 
-    let profiles = hqp_profiles();
-    let matrix = hqp_matrix();
-
     // Group zones by source protocol
     let grouped_zones: Vec<(String, Vec<Zone>)> = {
         let mut groups: std::collections::HashMap<String, Vec<Zone>> =
@@ -251,18 +159,14 @@ pub fn Zones() -> Element {
             let source = zone.source.clone().unwrap_or_else(|| "Other".to_string());
             groups.entry(source).or_default().push(zone.clone());
         }
-        // Sort zones within each group by name for stable ordering
         for zones in groups.values_mut() {
             zones.sort_by(|a, b| a.zone_name.cmp(&b.zone_name));
         }
-        // Sort groups in a sensible order: Roon, LMS, OpenHome, UPnP, then others
         let priority = |s: &str| -> i32 {
             match s.to_lowercase().as_str() {
                 "roon" => 0,
-                "lms" => 1,
-                "openhome" => 2,
-                "upnp" => 3,
-                _ => 4,
+                "upnp" => 1,
+                _ => 2,
             }
         };
         let mut result: Vec<_> = groups.into_iter().collect();
@@ -289,11 +193,7 @@ pub fn Zones() -> Element {
                                 key: "{zone.zone_id}",
                                 zone: zone.clone(),
                                 now_playing: np_map.get(&zone.zone_id).cloned(),
-                                hqp_profiles: profiles.clone(),
-                                hqp_matrix: matrix.clone(),
                                 on_control: control,
-                                on_load_profile: load_profile,
-                                on_set_matrix: set_matrix,
                             }
                         }
                     }
@@ -309,14 +209,6 @@ pub fn Zones() -> Element {
 
             h1 { class: "text-2xl font-bold mb-6", "Zones" }
 
-            // HQP error display
-            if let Some(error) = hqp_error() {
-                ErrorAlert {
-                    message: error,
-                    on_dismiss: move |_| hqp_error.set(None),
-                }
-            }
-
             section { id: "zones",
                 {content}
             }
@@ -329,11 +221,7 @@ pub fn Zones() -> Element {
 fn ZoneCard(
     zone: Zone,
     now_playing: Option<NowPlaying>,
-    hqp_profiles: Vec<HqpProfile>,
-    hqp_matrix: Option<HqpMatrixProfilesResponse>,
     on_control: EventHandler<(String, String)>,
-    on_load_profile: EventHandler<String>,
-    on_set_matrix: EventHandler<u32>,
 ) -> Element {
     let zone_id = zone.zone_id.clone();
     let zone_id_prev = zone_id.clone();
@@ -345,12 +233,6 @@ fn ZoneCard(
     let np = now_playing.as_ref();
     let is_playing = np.map(|n| n.is_playing).unwrap_or(false);
 
-    let has_hqp = zone
-        .dsp
-        .as_ref()
-        .map(|d| d.r#type.as_deref() == Some("hqplayer"))
-        .unwrap_or(false);
-
     // Extract volume info for component
     let volume = np.and_then(|n| n.volume);
     let volume_type = np.and_then(|n| n.volume_type.clone());
@@ -360,18 +242,13 @@ fn ZoneCard(
     let base_image_url = np.and_then(|n| n.image_url.clone()).unwrap_or_default();
     let image_key = np.and_then(|n| n.image_key.clone());
     let image_url = if let Some(key) = image_key {
-        let sep = if base_image_url.contains('?') {
-            "&"
-        } else {
-            "?"
-        };
+        let sep = if base_image_url.contains('?') { "&" } else { "?" };
         format!("{}{}k={}", base_image_url, sep, key)
     } else {
         base_image_url
     };
     let has_image = !image_url.is_empty();
 
-    // Now playing display
     let (track, artist) = np
         .map(|n| {
             if n.line1.as_deref().unwrap_or("Idle") != "Idle" {
@@ -385,22 +262,9 @@ fn ZoneCard(
         })
         .unwrap_or_default();
 
-    // HQP matrix info
-    let has_matrix = hqp_matrix
-        .as_ref()
-        .map(|m| !m.profiles.is_empty())
-        .unwrap_or(false);
-    let matrix_profiles = hqp_matrix
-        .as_ref()
-        .map(|m| m.profiles.clone())
-        .unwrap_or_default();
-    let matrix_current = hqp_matrix.as_ref().and_then(|m| m.current);
-
     rsx! {
         article { class: "zone-card",
-            // Main content with album art and info (same layout as zone detail)
             div { class: "flex gap-3 sm:gap-5 items-start overflow-hidden",
-                // Album art (smaller on mobile, 96px on larger screens)
                 if has_image {
                     img {
                         src: "{image_url}",
@@ -413,17 +277,11 @@ fn ZoneCard(
                     }
                 }
 
-                // Zone info
                 div { class: "flex-1 min-w-0",
-                    // Header with zone name and HQP badge
                     h3 { class: "flex items-center gap-2 mb-2 text-base font-semibold",
                         span { class: "truncate", "{zone.zone_name}" }
-                        if has_hqp {
-                            span { class: "badge badge-primary", "HQP" }
-                        }
                     }
 
-                    // Now playing info
                     if !track.is_empty() {
                         p { class: "font-medium text-sm truncate mb-1", "{track}" }
                         p { class: "text-sm text-muted truncate", "{artist}" }
@@ -433,18 +291,6 @@ fn ZoneCard(
                 }
             }
 
-            // HQP controls (for HQP zones only)
-            if has_hqp && (!hqp_profiles.is_empty() || has_matrix) {
-                HqpControlsCompact {
-                    profiles: hqp_profiles,
-                    matrix_profiles: matrix_profiles,
-                    active_matrix: matrix_current,
-                    on_profile_select: on_load_profile,
-                    on_matrix_select: on_set_matrix,
-                }
-            }
-
-            // Transport controls
             div { class: "flex flex-wrap items-center gap-2 mt-4",
                 button {
                     class: "btn btn-ghost",

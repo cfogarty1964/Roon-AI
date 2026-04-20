@@ -4,7 +4,7 @@
 #
 # Format: METHOD /path
 #
-# Note: UI routes (/, /ui/zones, /zone, /hqplayer, /lms, /knobs, /settings)
+# Note: UI routes (/, /ui/zones, /zone, /knobs, /settings)
 # are served by Dioxus SPA router (fallback handler), not explicit Axum routes.
 # They still work but aren't detected by the route extraction logic.
 #
@@ -22,33 +22,16 @@ GET /control
 GET /events
 GET /firmware/download
 GET /firmware/version
-GET /hqp/discover
-GET /hqp/instances
-GET /hqp/pipeline
-GET /hqp/profiles
-GET /hqp/status
-GET /hqp/zones/links
-GET /hqplayer/config
-GET /hqplayer/pipeline
-GET /hqplayer/profiles
-GET /hqplayer/status
 GET /knob/config
 GET /knob/devices
 GET /knob/now_playing
 GET /knob/now_playing/image
 GET /knob/zones
 GET /knobs/flash
-GET /lms/config
-GET /lms/discover
-GET /lms/player/{player_id}
-GET /lms/players
-GET /lms/status
 GET /manifest-s3.json
 GET /mcp
 GET /now_playing
 GET /now_playing/image
-GET /openhome/status
-GET /openhome/zones
 GET /roon/browse/status
 GET /roon/image
 GET /roon/search
@@ -61,24 +44,9 @@ GET /upnp/zones
 GET /zones
 POST /api/settings
 POST /control
-POST /hqp/detect
-POST /hqp/instances
-POST /hqp/pipeline
-POST /hqp/profiles/load
-POST /hqp/zones/link
-POST /hqp/zones/unlink
-POST /hqplayer/configure
-POST /hqplayer/control
-POST /hqplayer/profile
-POST /hqplayer/setting
-POST /hqplayer/volume
 POST /knob/config
 POST /knob/control
-POST /lms/configure
-POST /lms/control
-POST /lms/volume
 POST /mcp
-POST /openhome/control
 POST /roon/browse
 POST /roon/control
 POST /roon/play

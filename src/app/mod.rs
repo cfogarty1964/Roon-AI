@@ -7,13 +7,15 @@ use dioxus::prelude::*;
 
 pub mod api;
 pub mod components;
+pub mod default_zone;
 pub mod embedded_assets;
 pub mod pages;
 pub mod settings_context;
 pub mod sse;
 pub mod theme;
 
-use pages::{AiChat, HqPlayer, Knobs, Library, Lms, Settings, Zones};
+use default_zone::use_default_zone_provider;
+use pages::{AiChat, Knobs, Library, Settings, Zones};
 use settings_context::use_settings_provider;
 use sse::use_sse_provider;
 use theme::use_theme_provider;
@@ -30,6 +32,9 @@ pub fn App() -> Element {
     // Initialize settings context at app root (shared nav visibility state)
     use_settings_provider();
 
+    // Initialize default-zone context at app root (persisted to localStorage)
+    use_default_zone_provider();
+
     rsx! {
         Router::<Route> {}
     }
@@ -44,10 +49,6 @@ pub enum Route {
     AiChat {},
     #[route("/library")]
     Library {},
-    #[route("/hqplayer")]
-    HqPlayer {},
-    #[route("/lms")]
-    Lms {},
     #[route("/knobs")]
     Knobs {},
     #[route("/settings")]

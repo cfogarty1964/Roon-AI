@@ -1489,7 +1489,7 @@ async fn run_roon_loop(
     // Use same extension ID as Node.js for seamless migration
     let info = Info::new(
         "com.muness.unified-hifi-control".to_string(),
-        "Unified Hi-Fi Control",
+        "Roon AI",
         env!("UHC_VERSION"),
         Some("Muness Castle"),
         "",

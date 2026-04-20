@@ -7,6 +7,7 @@
 
 use crate::api::AppState;
 use anyhow::{anyhow, Context, Result};
+use pulldown_cmark::{html as cmark_html, Options, Parser as CmarkParser};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -83,7 +84,7 @@ fn tools() -> Vec<Value> {
     vec![
         json!({
             "name": "list_zones",
-            "description": "List all available playback zones (Roon, LMS, OpenHome, UPnP). Call this first to discover zone IDs when the user hasn't specified one.",
+            "description": "List all available playback zones (Roon, UPnP). Call this first to discover zone IDs when the user hasn't specified one.",
             "input_schema": {
                 "type": "object",
                 "properties": {},
@@ -259,23 +260,15 @@ async fn execute_tool(name: &str, input: &Value, state: &AppState) -> String {
             let query = input["query"].as_str().unwrap_or("");
             let zone_id = input["zone_id"].as_str();
             let source_str = input["source"].as_str().unwrap_or("library");
-
-            if zone_id.is_some_and(|z| z.starts_with("lms:")) {
-                match state.lms.search(query, zone_id, Some(8)).await {
-                    Ok(results) => format_search_results_lms(results),
-                    Err(e) => format!("Search error: {}", e),
-                }
-            } else {
-                use crate::adapters::roon::SearchSource;
-                let source = match source_str {
-                    "tidal" => SearchSource::Tidal,
-                    "qobuz" => SearchSource::Qobuz,
-                    _ => SearchSource::Library,
-                };
-                match state.roon.search(query, zone_id, Some(8), source).await {
-                    Ok(results) => format_search_results_roon(results),
-                    Err(e) => format!("Search error: {}", e),
-                }
+            use crate::adapters::roon::SearchSource;
+            let source = match source_str {
+                "tidal" => SearchSource::Tidal,
+                "qobuz" => SearchSource::Qobuz,
+                _ => SearchSource::Library,
+            };
+            match state.roon.search(query, zone_id, Some(8), source).await {
+                Ok(results) => format_search_results_roon(results),
+                Err(e) => format!("Search error: {}", e),
             }
         }
 
@@ -284,29 +277,16 @@ async fn execute_tool(name: &str, input: &Value, state: &AppState) -> String {
             let zone_id = input["zone_id"].as_str().unwrap_or("");
             let source_str = input["source"].as_str().unwrap_or("library");
             let action_str = input["action"].as_str().unwrap_or("play");
-
-            if zone_id.starts_with("lms:") {
-                use crate::adapters::lms::LmsPlayAction;
-                if action_str == "radio" {
-                    return "Radio mode is only supported on Roon zones.".to_string();
-                }
-                let action = LmsPlayAction::parse(Some(action_str));
-                match state.lms.search_and_play(query, zone_id, action).await {
-                    Ok(msg) => msg,
-                    Err(e) => format!("Play error: {}", e),
-                }
-            } else {
-                use crate::adapters::roon::{PlayAction, SearchSource};
-                let source = match source_str {
-                    "tidal" => SearchSource::Tidal,
-                    "qobuz" => SearchSource::Qobuz,
-                    _ => SearchSource::Library,
-                };
-                let action = PlayAction::parse(action_str);
-                match state.roon.search_and_play(query, zone_id, source, action).await {
-                    Ok(msg) => msg,
-                    Err(e) => format!("Play error: {}", e),
-                }
+            use crate::adapters::roon::{PlayAction, SearchSource};
+            let source = match source_str {
+                "tidal" => SearchSource::Tidal,
+                "qobuz" => SearchSource::Qobuz,
+                _ => SearchSource::Library,
+            };
+            let action = PlayAction::parse(action_str);
+            match state.roon.search_and_play(query, zone_id, source, action).await {
+                Ok(msg) => msg,
+                Err(e) => format!("Play error: {}", e),
             }
         }
 
@@ -318,51 +298,31 @@ async fn execute_tool(name: &str, input: &Value, state: &AppState) -> String {
             match action {
                 "volume_set" => {
                     let v = value.unwrap_or(50.0);
-                    let result = if zone_id.starts_with("lms:") {
-                        state.lms.change_volume(zone_id, v as f32, false).await
-                    } else {
-                        state.roon.change_volume(zone_id, v as f32, false).await
-                    };
-                    match result {
+                    match state.roon.change_volume(zone_id, v as f32, false).await {
                         Ok(()) => format!("Volume set to {}", v),
                         Err(e) => format!("Volume error: {}", e),
                     }
                 }
                 "volume_up" => {
                     let delta = value.unwrap_or(5.0);
-                    let result = if zone_id.starts_with("lms:") {
-                        state.lms.change_volume(zone_id, delta as f32, true).await
-                    } else {
-                        state.roon.change_volume(zone_id, delta as f32, true).await
-                    };
-                    match result {
+                    match state.roon.change_volume(zone_id, delta as f32, true).await {
                         Ok(()) => "Volume increased".to_string(),
                         Err(e) => format!("Volume error: {}", e),
                     }
                 }
                 "volume_down" => {
                     let delta = -(value.unwrap_or(5.0));
-                    let result = if zone_id.starts_with("lms:") {
-                        state.lms.change_volume(zone_id, delta as f32, true).await
-                    } else {
-                        state.roon.change_volume(zone_id, delta as f32, true).await
-                    };
-                    match result {
+                    match state.roon.change_volume(zone_id, delta as f32, true).await {
                         Ok(()) => "Volume decreased".to_string(),
                         Err(e) => format!("Volume error: {}", e),
                     }
                 }
                 _ => {
-                    // Map to backend action string
                     let backend = match action {
                         "playpause" => "play_pause",
                         other => other,
                     };
-                    let result = if zone_id.starts_with("lms:") {
-                        state.lms.control(zone_id, backend, None).await
-                    } else if zone_id.starts_with("openhome:") {
-                        state.openhome.control(zone_id, backend, None).await
-                    } else if zone_id.starts_with("upnp:") {
+                    let result = if zone_id.starts_with("upnp:") {
                         state.upnp.control(zone_id, backend, None).await
                     } else {
                         state.roon.control(zone_id, backend).await
@@ -388,24 +348,6 @@ fn format_search_results_roon(results: Vec<roon_api::browse::Item>) -> String {
         .map(|r| match &r.subtitle {
             Some(sub) => format!("{} — {}", r.title, sub),
             None => r.title.clone(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_search_results_lms(results: Vec<crate::adapters::lms::LmsSearchResult>) -> String {
-    if results.is_empty() {
-        return "No results found.".to_string();
-    }
-    results
-        .iter()
-        .map(|r| {
-            let detail = match (&r.artist, &r.album) {
-                (Some(a), Some(al)) => format!(" — {} / {}", a, al),
-                (Some(a), None) => format!(" — {}", a),
-                _ => String::new(),
-            };
-            format!("{}{}", r.title, detail)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -490,9 +432,18 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
     }
 
     Ok(AiChatResponse {
-        response: final_text,
+        response: markdown_to_html(&final_text),
         actions,
     })
+}
+
+fn markdown_to_html(text: &str) -> String {
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = CmarkParser::new_ext(text, opts);
+    let mut out = String::new();
+    cmark_html::push_html(&mut out, parser);
+    out
 }
 
 /// Produce a short human-readable summary of tool input for the actions log.

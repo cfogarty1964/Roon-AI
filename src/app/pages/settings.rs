@@ -4,17 +4,11 @@
 
 use dioxus::prelude::*;
 
-use crate::app::api::{AdapterSettings, AppSettings, HqpStatus, LmsConfig, RoonStatus};
+use crate::app::api::{AdapterSettings, AppSettings, RoonStatus};
 use crate::app::components::Layout;
 use crate::app::settings_context::use_settings;
 use crate::app::sse::use_sse;
 use crate::app::theme::{use_theme, Theme};
-
-/// OpenHome status response
-#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
-struct OpenHomeStatus {
-    device_count: usize,
-}
 
 /// UPnP status response
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
@@ -31,12 +25,8 @@ pub fn Settings() -> Element {
 
     // Adapter toggle signals
     let mut roon_enabled = use_signal(|| true);
-    let mut lms_enabled = use_signal(|| false);
-    let mut openhome_enabled = use_signal(|| false);
     let mut upnp_enabled = use_signal(|| false);
-    let mut hqplayer_enabled = use_signal(|| false);
 
-    // Hide knobs signal (LMS/HQPlayer visibility follows adapter enabled state)
     let mut hide_knobs = use_signal(|| false);
 
     // Load settings resource
@@ -50,13 +40,10 @@ pub fn Settings() -> Element {
     use_effect(move || {
         if let Some(Some(s)) = settings.read().as_ref() {
             roon_enabled.set(s.adapters.roon);
-            lms_enabled.set(s.adapters.lms);
-            openhome_enabled.set(s.adapters.openhome);
             upnp_enabled.set(s.adapters.upnp);
-            hqplayer_enabled.set(s.adapters.hqplayer);
             hide_knobs.set(s.hide_knobs_page);
-            // Sync to shared context for Nav reactivity (page visibility follows adapter state)
-            settings_ctx.update(s.hide_knobs_page, s.adapters.hqplayer, s.adapters.lms);
+            // Sync to shared context for Nav reactivity
+            settings_ctx.update(s.hide_knobs_page);
             settings_ctx.mark_loaded();
         }
     });
@@ -67,23 +54,8 @@ pub fn Settings() -> Element {
             .await
             .ok()
     });
-    let mut openhome_status = use_resource(|| async {
-        crate::app::api::fetch_json::<OpenHomeStatus>("/openhome/status")
-            .await
-            .ok()
-    });
     let mut upnp_status = use_resource(|| async {
         crate::app::api::fetch_json::<UpnpStatus>("/upnp/status")
-            .await
-            .ok()
-    });
-    let mut lms_config = use_resource(|| async {
-        crate::app::api::fetch_json::<LmsConfig>("/lms/config")
-            .await
-            .ok()
-    });
-    let mut hqp_status = use_resource(|| async {
-        crate::app::api::fetch_json::<HqpStatus>("/hqplayer/status")
             .await
             .ok()
     });
@@ -94,34 +66,23 @@ pub fn Settings() -> Element {
         let _ = event_count();
         if sse.should_refresh_discovery() {
             roon_status.restart();
-            openhome_status.restart();
             upnp_status.restart();
-            lms_config.restart();
-            hqp_status.restart();
         }
     });
 
     // Save settings handler
     let save_settings = move || {
         let hk = hide_knobs();
-        let hqp = hqplayer_enabled();
-        let lms = lms_enabled();
 
         // Update shared context immediately for reactive Nav updates
-        settings_ctx.update(hk, hqp, lms);
+        settings_ctx.update(hk);
 
         let settings = AppSettings {
             adapters: AdapterSettings {
                 roon: roon_enabled(),
-                lms,
-                openhome: openhome_enabled(),
                 upnp: upnp_enabled(),
-                hqplayer: hqp,
             },
             hide_knobs_page: hk,
-            // These are now derived from adapter state but we keep them for API compat
-            hide_hqp_page: !hqp,
-            hide_lms_page: !lms,
         };
         spawn(async move {
             let _ = crate::app::api::post_json_no_response("/api/settings", &settings).await;
@@ -129,10 +90,7 @@ pub fn Settings() -> Element {
     };
 
     let roon_st = roon_status.read().clone().flatten();
-    let openhome_st = openhome_status.read().clone().flatten();
     let upnp_st = upnp_status.read().clone().flatten();
-    let lms_cfg = lms_config.read().clone().flatten();
-    let hqp_st = hqp_status.read().clone().flatten();
 
     rsx! {
         Layout {
@@ -193,37 +151,6 @@ pub fn Settings() -> Element {
                                     }
                                 }
                             }
-                            // OpenHome (adapter only, no dedicated page)
-                            tr { class: "border-b border-default",
-                                td { class: "py-2 px-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "checkbox",
-                                        aria_label: "Enable OpenHome",
-                                        checked: openhome_enabled(),
-                                        onchange: move |_| {
-                                            openhome_enabled.toggle();
-                                            save_settings();
-                                        }
-                                    }
-                                }
-                                td { class: "py-2 px-3", "OpenHome" }
-                                td { class: "py-2 px-3",
-                                    if openhome_enabled() {
-                                        if let Some(ref status) = openhome_st {
-                                            if status.device_count > 0 {
-                                                span { class: "status-ok", "✓ {status.device_count} devices" }
-                                            } else {
-                                                "Searching..."
-                                            }
-                                        } else {
-                                            "..."
-                                        }
-                                    } else {
-                                        span { class: "text-muted", "-" }
-                                    }
-                                }
-                            }
                             // UPnP/DLNA
                             tr { class: "border-b border-default",
                                 td { class: "py-2 px-3",
@@ -246,72 +173,6 @@ pub fn Settings() -> Element {
                                                 span { class: "status-ok", "✓ {status.renderer_count} renderers" }
                                             } else {
                                                 "Searching..."
-                                            }
-                                        } else {
-                                            "..."
-                                        }
-                                    } else {
-                                        span { class: "text-muted", "-" }
-                                    }
-                                }
-                            }
-                            // LMS (adapter + page)
-                            tr { class: "border-b border-default",
-                                td { class: "py-2 px-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "checkbox",
-                                        aria_label: "Enable LMS",
-                                        checked: lms_enabled(),
-                                        onchange: move |_| {
-                                            lms_enabled.toggle();
-                                            save_settings();
-                                        }
-                                    }
-                                }
-                                td { class: "py-2 px-3", "LMS" }
-                                td { class: "py-2 px-3",
-                                    if lms_enabled() {
-                                        if let Some(ref cfg) = lms_cfg {
-                                            if cfg.connected {
-                                                if cfg.cli_subscription_active {
-                                                    span { class: "status-ok", "✓ CLI" }
-                                                } else {
-                                                    span { class: "text-yellow-500", "⚠ Polling" }
-                                                }
-                                            } else {
-                                                span { class: "status-err", "✗ Not connected" }
-                                            }
-                                        } else {
-                                            "..."
-                                        }
-                                    } else {
-                                        span { class: "text-muted", "-" }
-                                    }
-                                }
-                            }
-                            // HQPlayer (adapter + page)
-                            tr { class: "border-b border-default",
-                                td { class: "py-2 px-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "checkbox",
-                                        aria_label: "Enable HQPlayer",
-                                        checked: hqplayer_enabled(),
-                                        onchange: move |_| {
-                                            hqplayer_enabled.toggle();
-                                            save_settings();
-                                        }
-                                    }
-                                }
-                                td { class: "py-2 px-3", "HQPlayer" }
-                                td { class: "py-2 px-3",
-                                    if hqplayer_enabled() {
-                                        if let Some(ref status) = hqp_st {
-                                            if status.connected {
-                                                span { class: "status-ok", "✓ Connected" }
-                                            } else {
-                                                span { class: "status-err", "✗ Not connected" }
                                             }
                                         } else {
                                             "..."

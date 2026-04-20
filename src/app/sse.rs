@@ -19,12 +19,6 @@ pub struct ZonePayload {
     pub zone_id: String,
 }
 
-/// Payload for LMS player events
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct LmsPlayerPayload {
-    pub player_id: String,
-}
-
 /// Payload for volume changed events
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct VolumePayload {
@@ -56,23 +50,6 @@ pub enum SseEvent {
     SeekPositionChanged {
         payload: ZonePayload,
     },
-
-    // HQPlayer events
-    HqpConnected,
-    HqpDisconnected,
-    HqpStateChanged,
-    HqpPipelineChanged,
-
-    // LMS events
-    LmsConnected,
-    LmsDisconnected,
-    LmsPlayerStateChanged {
-        payload: LmsPlayerPayload,
-    },
-
-    // OpenHome events
-    OpenHomeDeviceFound,
-    OpenHomeDeviceLost,
 
     // UPnP events
     UpnpRendererFound,
@@ -120,8 +97,6 @@ impl SseContext {
                     | SseEvent::VolumeChanged { .. }
                     | SseEvent::RoonConnected
                     | SseEvent::RoonDisconnected
-                    | SseEvent::LmsConnected
-                    | SseEvent::LmsDisconnected
             )
         )
     }
@@ -133,36 +108,12 @@ impl SseContext {
         )
     }
 
-    pub fn should_refresh_hqp(&self) -> bool {
-        matches!(
-            self.last_event.read().as_ref(),
-            Some(
-                SseEvent::HqpConnected
-                    | SseEvent::HqpDisconnected
-                    | SseEvent::HqpStateChanged
-                    | SseEvent::HqpPipelineChanged
-            )
-        )
-    }
-
-    pub fn should_refresh_lms(&self) -> bool {
-        let event = self.last_event.read();
-        match event.as_ref() {
-            Some(SseEvent::LmsConnected | SseEvent::LmsDisconnected) => true,
-            // ZoneUpdated with lms: prefix indicates LMS player state change
-            Some(SseEvent::ZoneUpdated { payload }) => payload.zone_id.starts_with("lms:"),
-            _ => false,
-        }
-    }
-
     pub fn should_refresh_discovery(&self) -> bool {
         matches!(
             self.last_event.read().as_ref(),
             Some(
                 SseEvent::RoonConnected
                     | SseEvent::RoonDisconnected
-                    | SseEvent::OpenHomeDeviceFound
-                    | SseEvent::OpenHomeDeviceLost
                     | SseEvent::UpnpRendererFound
                     | SseEvent::UpnpRendererLost
             )
@@ -177,8 +128,6 @@ impl SseContext {
                     | SseEvent::ZoneRemoved { .. }
                     | SseEvent::RoonConnected
                     | SseEvent::RoonDisconnected
-                    | SseEvent::LmsConnected
-                    | SseEvent::LmsDisconnected
             )
         )
     }
