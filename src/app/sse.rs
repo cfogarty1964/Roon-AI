@@ -120,17 +120,6 @@ impl SseContext {
         )
     }
 
-    pub fn should_refresh_knobs(&self) -> bool {
-        matches!(
-            self.last_event.read().as_ref(),
-            Some(
-                SseEvent::ZoneUpdated { .. }
-                    | SseEvent::ZoneRemoved { .. }
-                    | SseEvent::RoonConnected
-                    | SseEvent::RoonDisconnected
-            )
-        )
-    }
 }
 
 /// RAII guard to close EventSource on drop

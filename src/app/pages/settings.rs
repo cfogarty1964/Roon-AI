@@ -6,7 +6,6 @@ use dioxus::prelude::*;
 
 use crate::app::api::{AdapterSettings, AppSettings, RoonStatus};
 use crate::app::components::Layout;
-use crate::app::settings_context::use_settings;
 use crate::app::sse::use_sse;
 use crate::app::theme::{use_theme, Theme};
 use crate::app::voice_context::use_voice;
@@ -22,14 +21,11 @@ struct UpnpStatus {
 pub fn Settings() -> Element {
     let sse = use_sse();
     let theme_ctx = use_theme();
-    let settings_ctx = use_settings();
     let voice_ctx = use_voice();
 
     // Adapter toggle signals
     let mut roon_enabled = use_signal(|| true);
     let mut upnp_enabled = use_signal(|| false);
-
-    let mut hide_knobs = use_signal(|| false);
 
     // Load settings resource
     let settings = use_resource(|| async {
@@ -43,10 +39,6 @@ pub fn Settings() -> Element {
         if let Some(Some(s)) = settings.read().as_ref() {
             roon_enabled.set(s.adapters.roon);
             upnp_enabled.set(s.adapters.upnp);
-            hide_knobs.set(s.hide_knobs_page);
-            // Sync to shared context for Nav reactivity
-            settings_ctx.update(s.hide_knobs_page);
-            settings_ctx.mark_loaded();
         }
     });
 
@@ -74,17 +66,11 @@ pub fn Settings() -> Element {
 
     // Save settings handler
     let save_settings = move || {
-        let hk = hide_knobs();
-
-        // Update shared context immediately for reactive Nav updates
-        settings_ctx.update(hk);
-
         let settings = AppSettings {
             adapters: AdapterSettings {
                 roon: roon_enabled(),
                 upnp: upnp_enabled(),
             },
-            hide_knobs_page: hk,
         };
         spawn(async move {
             let _ = crate::app::api::post_json_no_response("/api/settings", &settings).await;
@@ -183,23 +169,6 @@ pub fn Settings() -> Element {
                                         span { class: "text-muted", "-" }
                                     }
                                 }
-                            }
-                            // Knobs (page only, no adapter)
-                            tr { class: "border-b border-default",
-                                td { class: "py-2 px-3",
-                                    input {
-                                        r#type: "checkbox",
-                                        class: "checkbox",
-                                        aria_label: "Show Knobs page",
-                                        checked: !hide_knobs(),
-                                        onchange: move |_| {
-                                            hide_knobs.toggle();
-                                            save_settings();
-                                        }
-                                    }
-                                }
-                                td { class: "py-2 px-3", "Knobs" }
-                                td { class: "py-2 px-3 text-muted", "-" }
                             }
                         }
                     }

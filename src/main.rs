@@ -1,13 +1,12 @@
 //! Unified Hi-Fi Control - Rust Implementation
 //!
-//! A source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant.
+//! A natural-language Roon control bridge with AI chat and voice control.
 
 // Server-only: full server implementation
 #[cfg(feature = "server")]
 mod server {
     use unified_hifi_control::{
-        adapters, aggregator, api, app, bus, config, coordinator, embedded, firmware, knobs, mcp,
-        mdns,
+        adapters, aggregator, api, app, bus, config, coordinator, embedded, mcp,
     };
 
     // Import Startable trait for adapter lifecycle methods
@@ -18,8 +17,8 @@ mod server {
 
     use anyhow::Result;
     use axum::{
-        response::{Html, IntoResponse, Redirect},
-        routing::{delete, get, post, put},
+        response::{IntoResponse, Redirect},
+        routing::{delete, get, post},
         Router,
     };
     use dioxus::prelude::DioxusRouterExt;
@@ -30,29 +29,6 @@ mod server {
     use tokio_util::sync::CancellationToken;
     use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-    /// Flash page - redirects to external web flasher
-    async fn flash_page() -> impl IntoResponse {
-        Html(
-            r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Flash Knob - Roon AI</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-</head>
-<body class="container">
-    <h1>Flash Knob Firmware</h1>
-    <article>
-        <p><strong>HTTPS Required</strong></p>
-        <p>Browser-based flashing requires HTTPS. Use the official web flasher:</p>
-        <p><a href="https://roon-knob.muness.com/" target="_blank" rel="noopener" role="button">Open Web Flasher</a></p>
-    </article>
-</body>
-</html>"#,
-        )
-    }
 
     /// Legacy redirect: /control -> /ui/zones
     async fn control_redirect() -> impl IntoResponse {
@@ -114,7 +90,7 @@ mod server {
         coord.register_from_settings(&app_settings.adapters).await;
         tracing::info!("Adapter coordinator initialized");
 
-        // Construct base URL for display in Roon and mDNS
+        // Construct base URL for display in Roon Settings → Extensions
         let base_url = format!(
             "http://{}:{}",
             gethostname::gethostname().to_string_lossy(),
@@ -125,17 +101,10 @@ mod server {
         // Create all adapter instances (needed for API handlers regardless of state)
         // =========================================================================
 
-        // Initialize Knob device store early (needed for Roon extension status)
-        // Issue #76: Uses config subdirectory for knobs.json
-        let knob_store = knobs::KnobStore::new();
-        tracing::info!("Knob store initialized");
-
         // Roon adapter - coordinator handles starting based on enabled state
-        // Issue #169: Pass knob_store for controller count in extension status
         let roon = Arc::new(adapters::roon::RoonAdapter::new_configured(
             bus.clone(),
             base_url.clone(),
-            knob_store.clone(),
         ));
 
         // UPnP adapter
@@ -180,7 +149,6 @@ mod server {
         let state = api::AppState::new(
             roon,
             upnp.clone(),
-            knob_store,
             bus.clone(),
             zone_aggregator,
             coord.clone(),
@@ -229,35 +197,8 @@ mod server {
             .route("/api/ai/chat", post(api::ai_chat_handler))
             // Event stream (SSE)
             .route("/events", get(api::events_handler))
-            // Knob hardware API routes
-            .route("/knob/zones", get(knobs::knob_zones_handler))
-            .route("/knob/now_playing", get(knobs::knob_now_playing_handler))
-            .route("/knob/now_playing/image", get(knobs::knob_image_handler))
-            .route("/knob/control", post(knobs::knob_control_handler))
-            .route("/knob/config", get(knobs::knob_config_handler))
-            .route("/knob/config", post(knobs::knob_config_update_handler))
-            .route("/knob/devices", get(knobs::knob_devices_handler))
-            // Knob protocol routes (firmware uses these paths directly)
-            .route("/now_playing", get(knobs::knob_now_playing_handler))
-            .route("/now_playing/image", get(knobs::knob_image_handler))
-            .route("/control", post(knobs::knob_control_handler))
-            .route("/config/{knob_id}", get(knobs::knob_config_by_path_handler))
-            .route(
-                "/config/{knob_id}",
-                put(knobs::knob_config_update_by_path_handler),
-            )
-            // Firmware OTA routes
-            .route("/firmware/version", get(knobs::firmware_version_handler))
-            .route("/firmware/download", get(knobs::firmware_download_handler))
-            .route("/manifest-s3.json", get(knobs::manifest_handler))
-            .route(
-                "/admin/fetch-firmware",
-                post(knobs::admin_fetch_firmware_handler),
-            )
-            // Protocol route: /zones returns JSON (for knob, iOS, etc.)
-            .route("/zones", get(knobs::knob_zones_handler))
-            // Legacy SSR routes (flash page not yet migrated)
-            .route("/knobs/flash", get(flash_page))
+            // Zones JSON for the web UI
+            .route("/zones", get(api::zones_handler))
             // Legacy redirects
             .route("/control", get(control_redirect))
             .route("/admin", get(settings_redirect))
@@ -330,39 +271,6 @@ mod server {
         let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
         tracing::info!("Listening on http://{}", addr);
 
-        // Advertise via mDNS for knob discovery
-        let _mdns = match mdns::advertise(config.port, "Roon AI", &base_url) {
-            Ok(daemon) => {
-                tracing::info!("mDNS advertising started");
-                Some(daemon)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to start mDNS advertising: {}", e);
-                None
-            }
-        };
-
-        // Start firmware auto-update service
-        let firmware_auto_update = std::env::var("FIRMWARE_AUTO_UPDATE")
-            .map(|v| v != "false")
-            .unwrap_or(true);
-        let firmware_service = if firmware_auto_update {
-            let poll_interval = std::env::var("FIRMWARE_POLL_INTERVAL_MINUTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(60);
-            let service = Arc::new(firmware::FirmwareService::new());
-            service.clone().start_polling(poll_interval);
-            tracing::info!(
-                "Firmware auto-update enabled (poll interval: {} min)",
-                poll_interval
-            );
-            Some(service)
-        } else {
-            tracing::info!("Firmware auto-update disabled");
-            None
-        };
-
         let listener = tokio::net::TcpListener::bind(addr).await?;
 
         // Create shutdown future that cancels token before graceful shutdown (fixes #73)
@@ -406,9 +314,6 @@ mod server {
 
         // Stop adapters
         roon_for_shutdown.stop().await;
-        if let Some(ref fw) = firmware_service {
-            fw.stop();
-        }
         upnp.stop().await;
         tracing::info!("Shutdown complete");
 
@@ -464,7 +369,7 @@ async fn main() -> anyhow::Result<()> {
         );
         println!();
         println!(
-            "Source-agnostic hi-fi control bridge for Roon, UPnP, and hardware knobs."
+            "Natural-language Roon control bridge with AI chat and voice control."
         );
         println!();
         println!("USAGE:");

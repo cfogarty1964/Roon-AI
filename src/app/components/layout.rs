@@ -16,9 +16,6 @@ pub struct LayoutProps {
     pub nav_active: String,
     /// Page content
     pub children: Element,
-    /// Hide Knobs tab in nav
-    #[props(default = false)]
-    pub hide_knobs: bool,
 }
 
 /// Main layout component wrapping all pages.
@@ -68,7 +65,6 @@ pub fn Layout(props: LayoutProps) -> Element {
         // Body content
         Nav {
             active: props.nav_active.clone(),
-            hide_knobs: props.hide_knobs,
         }
         main { class: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4 overflow-x-hidden",
             {props.children}

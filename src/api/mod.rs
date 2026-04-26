@@ -6,7 +6,6 @@ use crate::adapters::Startable;
 use crate::aggregator::ZoneAggregator;
 use crate::bus::SharedBus;
 use crate::coordinator::AdapterCoordinator;
-use crate::knobs::KnobStore;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -31,7 +30,6 @@ use tokio_util::sync::CancellationToken;
 pub struct AppState {
     pub roon: Arc<RoonAdapter>,
     pub upnp: Arc<UPnPAdapter>,
-    pub knobs: KnobStore,
     pub bus: SharedBus,
     pub aggregator: Arc<ZoneAggregator>,
     pub coordinator: Arc<AdapterCoordinator>,
@@ -49,7 +47,6 @@ impl AppState {
     pub fn new(
         roon: Arc<RoonAdapter>,
         upnp: Arc<UPnPAdapter>,
-        knobs: KnobStore,
         bus: SharedBus,
         aggregator: Arc<ZoneAggregator>,
         coordinator: Arc<AdapterCoordinator>,
@@ -60,7 +57,6 @@ impl AppState {
         Self {
             roon,
             upnp,
-            knobs,
             bus,
             aggregator,
             coordinator,
@@ -82,65 +78,6 @@ impl AppState {
         self.sse_connections.load(Ordering::Relaxed)
     }
 
-    /// Fetch image from the appropriate adapter based on zone_id prefix
-    ///
-    /// Routes to the correct backend (Roon, LMS, OpenHome) based on the zone_id
-    /// prefix and fetches the image using that adapter's API.
-    ///
-    /// Note: UPnP zones don't support image retrieval as the protocol doesn't
-    /// expose album art URLs in a standardized way that can be proxied.
-    ///
-    /// If `format` is Some("rgb565"), converts to RGB565 format for ESP32 LCDs.
-    pub async fn get_image(
-        &self,
-        zone_id: &str,
-        image_key: &str,
-        width: Option<u32>,
-        height: Option<u32>,
-        format: Option<&str>,
-    ) -> anyhow::Result<crate::bus::ImageData> {
-        use crate::bus::ImageData;
-        use crate::knobs::image::jpeg_to_rgb565;
-
-        // Fetch raw image from appropriate adapter
-        let raw_image = if zone_id.starts_with("upnp:") {
-            anyhow::bail!(
-                "UPnP zones don't support image retrieval - the protocol doesn't expose album art URLs"
-            )
-        } else if zone_id.starts_with("roon:") || !zone_id.contains(':') {
-            let img = self.roon.get_image(image_key, width, height).await?;
-            ImageData {
-                content_type: img.content_type,
-                data: img.data,
-            }
-        } else {
-            anyhow::bail!("Unknown zone type for image: {}", zone_id)
-        };
-
-        // Convert to RGB565 if requested (for ESP32 LCD displays)
-        if format == Some("rgb565") {
-            // Use square dimensions when only one side specified (matches adapter behavior)
-            let (target_w, target_h) = match (width, height) {
-                (Some(w), Some(h)) => (w, h),
-                (Some(w), None) => (w, w),
-                (None, Some(h)) => (h, h),
-                (None, None) => (240, 240),
-            };
-
-            match jpeg_to_rgb565(&raw_image.data, target_w, target_h) {
-                Ok(rgb565) => Ok(ImageData {
-                    content_type: "application/octet-stream".to_string(),
-                    data: rgb565.data,
-                }),
-                Err(_) => {
-                    // Fall back to original on conversion error
-                    Ok(raw_image)
-                }
-            }
-        } else {
-            Ok(raw_image)
-        }
-    }
 }
 
 /// Error response
@@ -201,6 +138,12 @@ pub async fn roon_zones_handler(
     Json(ZonesWrapper {
         zones: state.roon.get_zones().await,
     })
+}
+
+/// GET /zones - Unified zone list across all adapters (used by the web UI)
+pub async fn zones_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let zones = state.aggregator.get_zones().await;
+    Json(serde_json::json!({ "zones": zones }))
 }
 
 /// GET /roon/zone/:zone_id - Get specific zone
@@ -903,9 +846,6 @@ pub async fn upnp_control_handler(
 /// App settings for UI preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
-    // Support both snake_case (Rust) and camelCase (Node.js) for seamless migration
-    #[serde(default, alias = "hideKnobsPage")]
-    pub hide_knobs_page: bool,
     #[serde(default)]
     pub adapters: AdapterSettings,
 }
@@ -925,7 +865,6 @@ fn default_true() -> bool {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            hide_knobs_page: false,
             adapters: AdapterSettings {
                 roon: true,
                 upnp: false,
@@ -940,22 +879,16 @@ fn settings_path() -> std::path::PathBuf {
     crate::config::get_config_file_path(APP_SETTINGS_FILE)
 }
 
-/// Load app settings from disk
-/// Issue #76: Uses read_config_file for backwards-compatible fallback
+/// Load app settings from disk.
+/// Reads from the config subdirectory first, falls back to the root for legacy files.
 pub fn load_app_settings() -> AppSettings {
-    // read_config_file checks subdir first, falls back to root for legacy files
-    let mut settings = match crate::config::read_config_file(APP_SETTINGS_FILE) {
-        Some(content) => match serde_json::from_str(&content) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("Failed to parse app settings: {}", e);
-                AppSettings::default()
-            }
-        },
+    match crate::config::read_config_file(APP_SETTINGS_FILE) {
+        Some(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+            tracing::warn!("Failed to parse app settings: {}", e);
+            AppSettings::default()
+        }),
         None => AppSettings::default(),
-    };
-
-    settings
+    }
 }
 
 fn save_app_settings(settings: &AppSettings) -> bool {

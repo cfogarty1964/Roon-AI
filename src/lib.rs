@@ -47,12 +47,6 @@ pub mod coordinator;
 #[cfg(feature = "server")]
 pub mod embedded;
 #[cfg(feature = "server")]
-pub mod firmware;
-#[cfg(feature = "server")]
-pub mod knobs;
-#[cfg(feature = "server")]
 pub mod ai;
 #[cfg(feature = "server")]
 pub mod mcp;
-#[cfg(feature = "server")]
-pub mod mdns;

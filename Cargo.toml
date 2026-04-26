@@ -20,12 +20,9 @@ server = [
     "dep:reqwest",
     "dep:tracing-subscriber",
     "dep:config",
-    "dep:image",
-    "dep:resvg",
     "dep:tokio-stream",
     "dep:tokio-util",
     "dep:ssdp-client",
-    "dep:mdns-sd",
     "dep:gethostname",
     "dep:rust-embed",
     "dep:mime_guess",
@@ -45,7 +42,6 @@ serde_json = "1"
 
 # Crypto/hashing (shared - pure Rust)
 md5 = "0.8"
-sha2 = "0.10"
 hex = "0.4"
 rand = "0.8"
 
@@ -101,25 +97,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 # Config (server only)
 config = { version = "0.15", optional = true }
 
-# Image processing (server only)
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"], optional = true }
-
 # Tokio stream utilities (server only)
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 tokio-util = { version = "0.7", optional = true }
 
-# SSDP/UPnP/mDNS discovery (server only)
+# SSDP/UPnP discovery (server only)
 ssdp-client = { version = "2", optional = true }
-mdns-sd = { version = "0.17.2", optional = true }
 gethostname = { version = "1.1.0", optional = true }
 
 # Embedded assets for single-binary distribution (server only, ADR 002)
 rust-embed = { version = "8", optional = true }
 mime_guess = { version = "2", optional = true }
 http-body-util = { version = "0.1", optional = true }
-
-# SVG rasterization (server only)
-resvg = { version = "0.46.0", features = ["default"], optional = true }
 
 # MCP server (server only)
 rust-mcp-sdk = { version = "0.8", default-features = false, features = ["server", "macros", "hyper-server", "sse"], optional = true }

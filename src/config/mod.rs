@@ -46,7 +46,6 @@ const CONFIG_SUBDIR_NAME: &str = "unified-hifi";
 const MIGRATABLE_CONFIG_FILES: &[&str] = &[
     "app-settings.json",
     "roon_state.json",
-    "knobs.json",
 ];
 
 /// Get config directory (XDG_CONFIG_HOME or platform default)
@@ -282,9 +281,7 @@ pub fn load_config() -> Result<Config> {
 ///
 /// This function runs once at startup to seamlessly import Node.js configs:
 /// - roon-config.json → roon_state.json (Roon pairing state)
-/// - hqp-config.json (adjust port → web_port mapping)
 /// - app-settings.json (handled by serde aliases in AppSettings)
-/// - knobs.json (compatible format)
 pub fn migrate_nodejs_configs() {
     let data_dir = get_data_dir();
 

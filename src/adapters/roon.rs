@@ -31,7 +31,6 @@ use crate::bus::{
     VolumeControl as BusVolumeControl, Zone as BusZone,
 };
 use crate::config::get_config_file_path;
-use crate::knobs::KnobStore;
 
 const ROON_STATE_FILE: &str = "roon_state.json";
 
@@ -257,8 +256,6 @@ pub struct RoonAdapter {
     base_url: Arc<RwLock<Option<String>>>,
     /// Whether the adapter has been started
     started: Arc<std::sync::atomic::AtomicBool>,
-    /// Knob store for displaying controller count in Roon extension
-    knob_store: Option<KnobStore>,
 }
 
 impl RoonAdapter {
@@ -270,28 +267,25 @@ impl RoonAdapter {
             shutdown: Arc::new(RwLock::new(CancellationToken::new())),
             base_url: Arc::new(RwLock::new(None)),
             started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            knob_store: None,
         }
     }
 
     /// Create Roon adapter ready to start
     ///
     /// `base_url` is shown in Roon Settings → Extensions (e.g., "http://hostname:3000")
-    /// `knob_store` is used to display controller count in Roon extension status
-    pub fn new_configured(bus: SharedBus, base_url: String, knob_store: KnobStore) -> Self {
+    pub fn new_configured(bus: SharedBus, base_url: String) -> Self {
         Self {
             state: Arc::new(RwLock::new(RoonState::default())),
             bus,
             shutdown: Arc::new(RwLock::new(CancellationToken::new())),
             base_url: Arc::new(RwLock::new(Some(base_url))),
             started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            knob_store: Some(knob_store),
         }
     }
 
     /// Create and immediately start Roon adapter (legacy API for compatibility)
-    pub async fn new(bus: SharedBus, base_url: String, knob_store: KnobStore) -> Result<Self> {
-        let adapter = Self::new_configured(bus, base_url, knob_store);
+    pub async fn new(bus: SharedBus, base_url: String) -> Result<Self> {
+        let adapter = Self::new_configured(bus, base_url);
         adapter.start_internal().await?;
         Ok(adapter)
     }
@@ -1300,7 +1294,6 @@ impl AdapterLogic for RoonAdapter {
             ctx.bus,
             base_url,
             ctx.shutdown,
-            self.knob_store.clone(),
         )
         .await
     }
@@ -1466,7 +1459,6 @@ async fn run_roon_loop(
     bus: SharedBus,
     base_url: String,
     shutdown: CancellationToken,
-    knob_store: Option<KnobStore>,
 ) -> Result<()> {
     tracing::info!("Starting Roon discovery...");
 
@@ -1535,7 +1527,6 @@ async fn run_roon_loop(
     let base_url_for_events = base_url;
     let shutdown_for_events = shutdown.clone();
     let restart_needed_for_events = restart_needed.clone();
-    let knob_store_for_events = knob_store;
     handles.spawn(async move {
         loop {
             // Use select! to allow cancellation and handle channel close
@@ -1564,24 +1555,8 @@ async fn run_roon_loop(
                     tracing::info!("Roon Core found: {} (version {})", core_name, core_version);
 
                     // Update status shown in Roon Settings → Extensions
-                    // Issue #169: Show version and controller count
                     if let Some(status) = core.get_status() {
-                        let knob_count = if let Some(ref store) = knob_store_for_events {
-                            store.list().await.len()
-                        } else {
-                            0
-                        };
-                        let message = if knob_count > 0 {
-                            format!(
-                                "v{} • {} controller{} • {}",
-                                env!("UHC_VERSION"),
-                                knob_count,
-                                if knob_count == 1 { "" } else { "s" },
-                                base_url_for_events
-                            )
-                        } else {
-                            format!("v{} • {}", env!("UHC_VERSION"), base_url_for_events)
-                        };
+                        let message = format!("v{} • {}", env!("UHC_VERSION"), base_url_for_events);
                         status.set_status(message, false).await;
                     }
 

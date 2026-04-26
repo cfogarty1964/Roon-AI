@@ -1438,3 +1438,177 @@ Because `selected_voice` is a `Signal<String>` shared by reference (Dioxus signa
 ### Backward compatibility
 
 The `localStorage` key (`roon-ai-voice`) is unchanged, so any voice choice the user already saved continues to work after this refactor. No migration needed.
+
+---
+
+## Recent Work (2026-04-26) — Push to Personal Fork + History Cleanup
+
+### Pushed
+
+Commit `ff9e003` (`feat: Conversational AI with persistence, voice in/out, and play-button suggestions`) is now on **`cfogarty/v3`** at `https://github.com/cfogarty1964/Roon-AI/tree/v3`. It bundles all of this session's work into one logical commit.
+
+### History cleanup
+
+The previous local-only commit `a198c5d` (titled simply "rust") was a 145 MB pile of IDE/tooling junk that had accumulated from a casual `git add .` — Visual Studio workspace internals (`.vs/`), the rustup installer, the Tailwind CLI binary, and Claude config. GitHub's 100 MB file-size limit rejected the push because of `tailwindcss.exe` (123 MB).
+
+**Resolution**: dropped `a198c5d` entirely (it had no useful content) via `git reset --mixed fa944d7`, kept the working tree, then re-staged only the legitimate session changes and committed them as `ff9e003`. No force-push was needed because the junk commit had never reached the remote.
+
+### `.gitignore` extensions
+
+To prevent the same junk from being re-committed by accident:
+
+```gitignore
+/tailwindcss.exe              # Windows Tailwind CLI binary (~123 MB)
+/rustup-init.exe              # Rustup installer (~12 MB)
+.vs/                          # Visual Studio workspace state
+/start-roon-ai.ps1            # Per-developer launcher script with hardcoded paths
+```
+
+`.claude/settings.local.json` is already tracked in some commits but should ideally also be local-only (per-developer Claude Code config). Not gitignoring it now to avoid breaking existing workflows; future cleanup if needed.
+
+## Recent Work (2026-04-26) — Knob Subsystem Removal
+
+### Why
+
+The user explored using an existing ESP32 round-LCD device (which turned out to be a generic Chinese smart-display product, not the muness/roon-knob hardware the bridge was designed for) and decided to refocus the project entirely on AI/voice control of Roon. The whole knob subsystem became dead weight: ~3,000 lines of Rust for hardware that wasn't going to be connected.
+
+### Files deleted
+
+| File / directory | Description |
+|---|---|
+| `src/knobs/` | Whole module — `mod.rs`, `routes.rs` (~1100 lines of HTTP handlers), `store.rs` (knob device registry, ~400 lines), `image.rs` (RGB565 conversion for the knob LCD) |
+| `src/firmware.rs` | Firmware auto-fetcher polling `muness/roon-knob` GitHub releases |
+| `src/mdns.rs` | mDNS advertisement of `_roonknob._tcp.local.` for knob discovery |
+| `src/app/pages/knobs.rs` | The `/knobs` web page (knob registration, config, firmware management, ~960 lines) |
+| `src/app/settings_context.rs` | Reactive shared context that existed only to plumb `hide_knobs` into Nav |
+| `src/app/components/form_inputs.rs` | `PowerModeInput` + `ToggleInput` — only consumed by the deleted knobs page |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/lib.rs` | Removed `pub mod firmware;`, `pub mod knobs;`, `pub mod mdns;` |
+| `src/main.rs` | Removed knob/firmware/mdns imports, the `/knobs/flash` HTML page, `KnobStore::new()` init, all `/knob/*`, `/now_playing`, `/control`, `/config/*`, `/firmware/*`, `/manifest-s3.json`, `/admin/fetch-firmware` route registrations, mDNS advertisement, FirmwareService auto-update task, `flash_page` and `firmware_service` from shutdown sequence. Added a small `/zones` route pointing to a new `api::zones_handler`. Changed taglines + module doc-comment to reflect the new focus |
+| `src/api/mod.rs` | Removed `KnobStore` import + the `knobs` field on `AppState` (and its constructor parameter); removed the `AppState::get_image()` method (its only caller was the knob image handler); removed `hide_knobs_page` from `AppSettings` (and its `hideKnobsPage` serde alias); removed the unused-mut on `load_app_settings`. Added a new `zones_handler` returning the unified zone list as `{ zones: [...] }` for the web UI |
+| `src/adapters/roon.rs` | `RoonAdapter` no longer carries a `knob_store: Option<KnobStore>`. Constructors `new`, `new_configured`, and `new_disconnected` lost the `knob_store` parameter. The Roon-extension status message in Roon Settings is now just `v{version} • {base_url}` (the "controller count" line was knob-specific). The threading of `knob_store` through `run_roon_loop` is gone |
+| `src/app/api.rs` | Removed `KnobDevicesResponse`, `KnobDevice`, `KnobStatus`, `KnobConfigResponse`, `PowerModeConfig`, `KnobConfig`, `FirmwareVersion`, `FetchFirmwareResponse`. Removed `hide_knobs_page` from `AppSettings` |
+| `src/app/mod.rs` | Removed `Route::Knobs`, `Knobs` import, `pub mod settings_context;`, `use_settings_provider()` call |
+| `src/app/pages/mod.rs` | Removed `mod knobs;` and `pub use knobs::Knobs;` |
+| `src/app/components/nav.rs` | Removed Knobs nav links (desktop + mobile), the `hide_knobs` prop, and the `use_settings()` reactive lookup |
+| `src/app/components/layout.rs` | Removed `hide_knobs` prop and pass-through to `Nav` |
+| `src/app/components/mod.rs` | Removed `pub mod form_inputs;` and the `PowerModeInput` / `ToggleInput` re-exports |
+| `src/app/pages/settings.rs` | Removed the "Knobs" row from the Features table, the `hide_knobs` signal, the `use_settings()` import, and the `hide_knobs_page` plumbing in `save_settings`. Voice + Appearance sections kept untouched |
+| `src/app/sse.rs` | Removed `should_refresh_knobs()` method |
+| `src/config/mod.rs` | Removed `"knobs.json"` from `MIGRATABLE_CONFIG_FILES` and the matching docstring line |
+| `Cargo.toml` | Dropped `dep:image`, `dep:mdns-sd`, `dep:resvg` from the `server` feature; removed the `image`, `mdns-sd`, `resvg` optional deps and the unconditional `sha2` dep — all were knob-only |
+
+### Routes removed
+
+```
+GET    /knob/zones                   GET    /firmware/version
+GET    /knob/now_playing             GET    /firmware/download
+GET    /knob/now_playing/image       GET    /manifest-s3.json
+POST   /knob/control                 POST   /admin/fetch-firmware
+GET    /knob/config                  GET    /knobs/flash
+POST   /knob/config
+GET    /knob/devices                 (mDNS) _roonknob._tcp.local.
+GET    /now_playing
+GET    /now_playing/image
+POST   /control
+GET    /config/{knob_id}
+PUT    /config/{knob_id}
+```
+
+The unified `GET /zones` was preserved as a slimmer handler in `src/api/mod.rs` (now `api::zones_handler`) since it's used by the web UI for the zone picker.
+
+### Behavior changes for users
+
+- The `/knobs` URL now 404s. Anyone with a bookmark needs to update.
+- The Roon extension status shown in Roon → Settings → Extensions no longer mentions "controller count" — just `v0.0.0 • http://hostname:8088`.
+- mDNS advertisement on `_roonknob._tcp.local.` is gone. Nothing on the LAN was consuming it; if you want service discovery for a phone app later, you'd add a different mDNS type.
+- `app-settings.json` written by old versions might still contain `"hide_knobs_page": true` — serde silently ignores it now (no migration needed).
+- A pre-existing `knobs.json` in the config directory is harmless — never read again.
+
+### Build + size impact
+
+| Metric | Before | After |
+|---|---|---|
+| Server build (release) | ~3 min | ~2:20 |
+| Server binary | ~36 MB | ~40 MB (no meaningful change — LTO was already tree-shaking the unused code, and the new `/zones` handler + other adjustments offset most of the deletions in compiled size) |
+| WASM bundle | (no change) | (no change) |
+| Source lines of code (crate) | ~22k | ~19k (the real win — much less to read, maintain, and reason about) |
+| Crate dependencies | ~570 | ~520 (image/resvg/mdns-sd dropped, but their transitives often turned out to be shared with other crates so the total count moved less than expected) |
+
+### Note on `start-roon-ai.ps1`
+
+This file is intentionally NOT in the repo because it contains hardcoded absolute paths to `D:\OneDrive - 221B\SCRIPTS\Roon AI\` and a (currently empty) `$env:ANTHROPIC_API_KEY` slot. It's a per-developer convenience launcher. The standard run procedure remains:
+
+```powershell
+$env:RUST_LOG="debug"
+.\target\release\unified-hifi-control.exe
+```
+
+(With `ANTHROPIC_API_KEY` set via env var or persisted in `%APPDATA%\unified-hifi-control\config.toml` under `[ai] api_key = "..."` — see the AI Natural Language Music Control section above.)
+
+---
+
+## Next Session — Candidate Work Items (2026-04-26)
+
+Four candidates worth considering next, ordered by perceived UX impact. Each is independent — none blocks the others.
+
+### 1. Stream the AI response (~3 hours) — **recommended**
+
+The 3–8 second spinner after pressing Send is now the worst moment in an otherwise-snappy flow. Replacing it with streaming would feel transformatively faster.
+
+**What to build:**
+- Switch `POST /api/ai/chat` from a synchronous JSON response to an SSE stream. Claude's `/v1/messages` already supports SSE — pass `stream: true` in the request body and forward `content_block_delta` events to the client.
+- On the client, replace the single `ai_chat()` fetch with an `EventSource` (or fetch + stream reader). Append text deltas to the in-progress assistant bubble as they arrive.
+- Once the final stop event lands, run the existing `extract_suggestions()` over the assembled text, then trigger TTS (if Speak is on) and the continuous-mode mic restart (if Hands-free is on).
+- Keep the agentic tool-use loop intact — only the final text reply needs to stream. Tool-use stop reasons still resolve synchronously, then a fresh streamed call covers the next iteration.
+
+**Files to touch:** `src/ai/mod.rs` (call), `src/api/mod.rs` (handler — return `axum::response::sse::Sse` instead of `Json`), `src/app/api.rs` (client streaming helper), `src/app/pages/conversational_ai.rs` (in-progress bubble rendering, defer TTS until stop).
+
+### 2. Now-playing context on the Conversational page (~1 hour) — **recommended**
+
+A small banner above the chat showing the current track on the selected zone unlocks natural follow-ups — *"what is this?"*, *"skip it"*, *"more like this"* — without typing the title. The agent sees it as additional context.
+
+**What to build:**
+- Add a `current_track: Option<NowPlaying>` field to `AiChatRequest`. Client populates it from the existing SSE `now_playing` cache for the selected zone before sending.
+- In the system prompt, append a "currently playing on this zone: TITLE — ARTIST — ALBUM" line when present.
+- In the UI, render a thin always-visible banner (similar style to the loading pulse) showing the now-playing tile with art thumbnail and track/artist. Clicking it could pause/resume.
+
+**Files to touch:** `src/ai/mod.rs` (system prompt, `AiChatRequest`), `src/app/api.rs` (mirror), `src/app/pages/conversational_ai.rs` (banner + populate before send), reuse the existing `NowPlaying` type and `/zones/{id}/now_playing` endpoint.
+
+**Why this pairs well with #1**: streaming + now-playing context together makes the page feel like a live remote. Together about half a day; do them in that order so the now-playing banner reflects state through any tool-call latency.
+
+### 3. Multiple saved conversations / sidebar (~half day)
+
+ChatGPT-style: sidebar listing past chats by title, click to load. Each conversation is its own `localStorage` key with its own message history. Useful for keeping a "late-night jazz" thread distinct from a "workout pump-up" thread.
+
+**What to build:**
+- Storage: `roon-ai-conversations-index` (Vec<{id, title, created_at, last_used}>) and `roon-ai-conversation-{id}` per conversation.
+- Auto-title: after the first assistant reply, ask Claude (separate single-shot call) for a 2–4 word title for the conversation so far.
+- UI: collapsible sidebar with new-chat button + list. Selecting one swaps the `messages` signal.
+- Migrate the current single `roon-ai-conversation` key to a default conversation on first load.
+
+**Files to touch:** `src/app/pages/conversational_ai.rs` (significant), possibly a new `src/app/conversations.rs` module for the index management.
+
+### 4. Server-side cloud TTS (~half day, ~$0.30/session)
+
+For users on Chrome/Firefox where the bundled voices are mediocre, or for cross-device voice consistency, add a server-side TTS proxy.
+
+**What to build:**
+- New route `POST /api/tts { text, voice }` → proxies to OpenAI TTS (`/audio/speech`, model `tts-1` or `tts-1-hd`), streams MP3 bytes back.
+- API key resolution: same pattern as Anthropic — env var `OPENAI_API_KEY` or `[tts] api_key = "..."` in `unified-hifi-control.toml`. Server logs `TTS enabled (OpenAI key found)` on startup.
+- Voice picker on Settings page gains a section header: "Browser voices" (existing list) and "Cloud voices" (six OpenAI voices: alloy, echo, fable, onyx, nova, shimmer). Selection is a single dropdown across both groups; the chosen voice's source determines whether `RoonSpeech.speak()` uses local TTS or fetches from `/api/tts` and plays via `<audio>`.
+
+**Files to touch:** new `src/tts/mod.rs`, `src/api/mod.rs` (handler), `src/main.rs` (route + key resolution), `src/app/voice_context.rs` (mark cloud-source voices), `src/app/pages/conversational_ai.rs` (`SPEECH_INSTALL_JS` updated to fetch + play `<audio>` for cloud voices), `Cargo.toml` ([tts] config + maybe a streaming MP3 dep — actually nothing extra needed, reqwest can do it).
+
+### Other ideas captured but lower priority
+
+- **Wake word ("Hey Roon")** — passive listening with VAD so the page stays in standby. Needs a small browser-side VAD (or a server-side keyword-spotting model). Bigger lift; unlocks ambient use.
+- **Per-message replay button** for TTS — small 🔊 next to each assistant bubble. Trivial (~15 min) but currently unnecessary if Speak toggle works.
+- **Conversation summarization** — when message history exceeds N tokens, ask Claude to summarise the older turns. Not yet needed; current pricing is pennies per long session.
+- **Auto-fetch album tracks for context** — when AI is talking about an album, surface its track list with per-track ▶ Play buttons. Combine with #2 for "what's the third track of this?" working naturally.
+- **Binary rename** to `roon-ai.exe` — long-deferred cosmetic mismatch. See "Bigger rename" notes from 2026-04-19.
+- **Rename `/conversational` → `/ai`** — shorter URL now that the original `/ai` is gone. ~5 line change.

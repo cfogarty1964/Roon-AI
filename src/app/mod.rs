@@ -10,14 +10,12 @@ pub mod components;
 pub mod default_zone;
 pub mod embedded_assets;
 pub mod pages;
-pub mod settings_context;
 pub mod sse;
 pub mod theme;
 pub mod voice_context;
 
 use default_zone::use_default_zone_provider;
-use pages::{ConversationalAi, Knobs, Library, Settings, Zones};
-use settings_context::use_settings_provider;
+use pages::{ConversationalAi, Library, Settings, Zones};
 use sse::use_sse_provider;
 use theme::use_theme_provider;
 use voice_context::use_voice_provider;
@@ -30,9 +28,6 @@ pub fn App() -> Element {
 
     // Initialize theme context at app root (handles localStorage + DOM class)
     use_theme_provider();
-
-    // Initialize settings context at app root (shared nav visibility state)
-    use_settings_provider();
 
     // Initialize default-zone context at app root (persisted to localStorage)
     use_default_zone_provider();
@@ -54,8 +49,6 @@ pub enum Route {
     ConversationalAi {},
     #[route("/library")]
     Library {},
-    #[route("/knobs")]
-    Knobs {},
     #[route("/settings")]
     Settings {},
 }

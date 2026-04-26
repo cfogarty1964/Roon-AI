@@ -1,7 +1,6 @@
 //! Navigation component using Tailwind CSS.
 
 use crate::app::embedded_assets::LOGO_DATA_URL;
-use crate::app::settings_context::use_settings;
 use crate::app::Route;
 use dioxus::prelude::*;
 
@@ -9,25 +8,12 @@ use dioxus::prelude::*;
 pub struct NavProps {
     /// The currently active page ID (e.g., "zones", "settings")
     pub active: String,
-    /// Hide Knobs tab (fallback if settings not loaded)
-    #[props(default = false)]
-    pub hide_knobs: bool,
 }
 
 /// Navigation bar using Tailwind CSS with mobile toggle.
 #[component]
 pub fn Nav(props: NavProps) -> Element {
     let mut menu_open = use_signal(|| false);
-
-    // Use shared settings context for reactive updates
-    let settings_ctx = use_settings();
-
-    // Use context values if loaded, otherwise fall back to props
-    let hide_knobs = if settings_ctx.is_loaded() {
-        settings_ctx.hide_knobs()
-    } else {
-        props.hide_knobs
-    };
 
     let nav_link_class = |page: &str| {
         if props.active == page {
@@ -62,9 +48,6 @@ pub fn Nav(props: NavProps) -> Element {
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
                     Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, "Conversational AI" }
-                    if !hide_knobs {
-                        Link { class: nav_link_class("knobs"), to: Route::Knobs {}, "Knobs" }
-                    }
                     Link { class: nav_link_class("settings"), to: Route::Settings {}, "Settings" }
                 }
 
@@ -96,9 +79,6 @@ pub fn Nav(props: NavProps) -> Element {
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, onclick: move |_| menu_open.set(false), "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
                     Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, onclick: move |_| menu_open.set(false), "Conversational AI" }
-                    if !hide_knobs {
-                        Link { class: nav_link_class("knobs"), to: Route::Knobs {}, onclick: move |_| menu_open.set(false), "Knobs" }
-                    }
                     Link { class: nav_link_class("settings"), to: Route::Settings {}, onclick: move |_| menu_open.set(false), "Settings" }
                 }
             }
