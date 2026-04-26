@@ -1139,3 +1139,302 @@ A persistent default zone can be set from any page that has a zone picker (`/ai`
 | `src/app/mod.rs` | Added `pub mod default_zone`; calls `use_default_zone_provider()` at app root |
 | `src/app/pages/ai_chat.rs` | Pre-selects default zone on mount; ★/☆ button next to zone picker |
 | `src/app/pages/library.rs` | Pre-selects default zone on mount; ★/☆ button next to zone picker |
+
+---
+
+## Recent Work (2026-04-24) — AI Chat Play-Button Suggestions
+
+### Feature
+
+When the AI reply recommends specific pieces or tracks (e.g. *"suggest five late-night jazz piano tracks"*, *"what are some good recordings of Mahler's 5th Adagietto?"*), each suggestion renders as a row with a **▶ Play** button directly under the assistant bubble. Clicking ▶ Play submits a new chat turn like `Play "Title" by Artist` on the currently selected zone — which routes through the existing agentic loop and invokes `play_music` in Roon. The tool-call log on the right column updates as usual, keeping the whole flow transparent.
+
+Suggestions only appear for recommendations — not for replies that confirm a playback the AI just executed. If Claude omits the block (or emits malformed JSON), the prose is still shown and the suggestions list is empty.
+
+### How it works
+
+- **Wire format**: the system prompt instructs Claude to end reply text with a sentinel-wrapped JSON block:
+  ```
+  <<<SUGGESTIONS>>>
+  [{"title": "…", "artist": "…", "album": "…"}]
+  <<<END_SUGGESTIONS>>>
+  ```
+- **Server extraction** (`src/ai/mod.rs::extract_suggestions`): finds the block, parses the JSON array, strips the block from the reply text *before* markdown→HTML conversion. Parse failures silently fall back to an empty list.
+- **Response shape**: `AiChatResponse` now carries `suggestions: Vec<Suggestion>` where `Suggestion { title, artist?, album? }`.
+- **Click flow**: a new `do_send_text(msg, …)` helper on the page skips the input box and submits a canned `Play "X" by Y` turn directly. The old `do_send()` now delegates to it after reading/clearing the input.
+- **Play message format**:
+  - With artist: `Play "Title" by Artist`
+  - With album only: `Play "Title" from Album`
+  - Neither: `Play "Title"`
+
+### Key design choices
+
+- **Sidecar JSON, not a new tool.** The alternative was a dedicated `suggest_songs` tool that Claude would call to emit a structured list. The sentinel-block approach is simpler (no new tool definition, no new dispatch branch) and Sonnet 4.6 follows the format instruction reliably. Use this pattern for other structured-output-alongside-prose features in the AI chat.
+- **Route clicks through a new chat turn, not a direct REST call.** The ▶ Play button calls `do_send_text`, which goes through the full agentic loop rather than hitting `/roon/search_and_play` directly. This keeps the tool-call log populated and preserves conversational context — the user sees exactly what the AI did.
+
+### Files created / modified
+
+| File | Change |
+|---|---|
+| `src/ai/mod.rs` | Added `Suggestion` struct + `suggestions` field on `AiChatResponse`; extended `system_prompt` with the sentinel-block instruction; new `extract_suggestions()` parser; wired into `run_agent` before markdown conversion |
+| `src/app/api.rs` | Mirrored `Suggestion` struct and `suggestions` field on the shared (client-side) `AiChatResponse` |
+| `src/app/pages/ai_chat.rs` | `ChatMessage` carries `suggestions`; new `do_send_text()` helper; old `do_send()` delegates to it; renders ▶ Play rows under each assistant bubble when suggestions are non-empty; new `play_message_for()` formatter |
+
+No new crate dependencies. No new routes. No breaking changes to existing `/api/ai/chat` callers (new field is `#[serde(default)]`).
+
+### Test checklist
+
+- "Suggest five late-night jazz piano tracks" → prose + 5 play rows ✅
+- Click a ▶ Play → new user turn appears with `Play "X" by Y`, tool log shows `play_music(...)`, track starts on the selected zone ✅
+- "Play Kind of Blue on the kitchen" → no suggestions rendered (this is a direct play, not a recommendation) ✅
+- Malformed JSON in the sentinel block → prose shown, no suggestions, no server error ✅
+
+---
+
+## Recent Work (2026-04-26) — Conversational AI Page (Persistent History)
+
+### Feature
+
+A new tab **Conversational AI** at `/conversational` provides a persistent, multi-turn version of the AI chat. Unlike the original `/ai` page (which is a fresh single-shot session per message), this page:
+
+- **Remembers prior turns** — each request to `/api/ai/chat` includes the full `history` so Claude has context for follow-ups like *"of those, which is the most relaxed?"* or *"play it on the kitchen"*.
+- **Persists across reloads** — the conversation is saved to `localStorage` on every change and hydrated on mount. Refreshing the browser doesn't lose state.
+- **Same UX as `/ai`** — two-column layout, ▶ Play suggestion rows, tool-call log, ★/☆ default-zone star, Clear button. The Clear button also wipes the localStorage entry.
+
+The original `/ai` page is unchanged and still single-shot — both pages coexist so you can compare. The decision whether to retire `/ai` later is deferred.
+
+### How it works
+
+**Wire-protocol additions** (backward-compatible — both fields are optional / `#[serde(default)]`):
+
+`AiChatRequest` gained:
+```rust
+pub history: Vec<HistoryTurn>,   // [{role: "user" | "assistant", text: String}, ...]
+```
+
+`AiChatResponse` gained:
+```rust
+pub response_markdown: String,   // raw markdown, suggestions block stripped
+```
+
+**Server flow** (`src/ai/mod.rs::run_agent`):
+1. Build initial `messages` vec by translating each `history` entry into a Claude `Message` (role unchanged, plain text content).
+2. Skip non-Claude roles (`error` etc.) defensively.
+3. Append the new user message and run the existing agentic tool-use loop unchanged.
+4. After `extract_suggestions()` strips the sentinel block, return both the rendered HTML (`response`) and the cleaned markdown (`response_markdown`).
+
+**Client storage** (`src/app/pages/conversational_ai.rs`):
+- `STORAGE_KEY = "roon-ai-conversation"` in `localStorage`.
+- `ChatMessage` derives `Serialize`/`Deserialize` and gains a `markdown: String` field — for assistant turns this holds the raw markdown that gets replayed back to the server in the next request's `history`.
+- `use_effect` watches `messages` and writes the JSON snapshot on every change.
+- A second `use_effect` (runs once on hydration) reads the JSON back. The hydrate effect doesn't need a `#[cfg(target_arch = "wasm32")]` gate because Dioxus effects don't fire during SSR; the non-wasm storage stubs are no-ops.
+- `build_history()` filters the in-memory `messages` to user/assistant turns (drops errors) and produces the `HistoryTurn` vec for the next request.
+
+### Files created / modified
+
+| File | Change |
+|---|---|
+| `src/ai/mod.rs` | Added `HistoryTurn` struct + `history` field on `AiChatRequest`; added `response_markdown` field on `AiChatResponse`; `run_agent` now seeds `messages` from history before appending the new user message |
+| `src/app/api.rs` | Mirrored `HistoryTurn` and the two new fields on the shared client types |
+| `src/app/pages/conversational_ai.rs` | **New** — full page mirroring `ai_chat.rs` plus history send-back, `markdown` on `ChatMessage`, `localStorage` hydrate/save/clear |
+| `src/app/pages/mod.rs` | Added `mod conversational_ai;` and `pub use conversational_ai::ConversationalAi;` |
+| `src/app/mod.rs` | Added `Route::ConversationalAi` mapped to `/conversational`; imported `ConversationalAi` |
+| `src/app/components/nav.rs` | Added "Conversational AI" link (desktop + mobile) |
+| `src/app/pages/ai_chat.rs` | Minor backward-compat fix: `AiChatRequest` construction now includes `history: vec![]`; destructure pattern uses `..` to ignore `response_markdown` |
+
+No new crate dependencies. No new endpoints — `/api/ai/chat` is the only AI route, both pages POST to it.
+
+### Web UI routes (updated)
+
+| Route | Page | Purpose |
+|---|---|---|
+| `/` | Zones | All zones, now-playing, transport + volume controls |
+| `/ai` | AI Music Control | Single-shot NLS chat (no history) |
+| `/conversational` | Conversational AI | Persistent multi-turn chat with localStorage |
+| `/library` | Library | Browse Roon library |
+| `/knobs` | Knobs | ESP32 firmware management |
+| `/settings` | Settings | Adapter enable/disable |
+
+### Token cost note
+
+Every request to `/conversational` re-sends the full prior history. For Sonnet 4.6 at ~$3/M input tokens, even a 50-turn session is pennies — non-issue for a single-user local bridge. If conversations ever balloon, options are: cap to last N turns, or add an Anthropic prompt-cache `cache_control` block on the history array (Anthropic prompt caching reduces cost ~10× for the cached prefix).
+
+### Known limitations / next steps
+
+- **No streaming** — still synchronous; `/conversational` shows the spinner for ~3–8s on long tool chains. Same as `/ai`.
+- **No conversation summary** — when token budget eventually matters, summarising old turns is the right move; not yet needed.
+
+---
+
+## Recent Work (2026-04-26) — Voice In/Out on Conversational AI
+
+### Feature
+
+The `/conversational` page now supports speech input and spoken replies. Three new controls:
+
+- **🔊 Speak** (header toggle) — when on, every assistant reply is spoken aloud via the browser's `SpeechSynthesis`. Markdown is stripped before TTS so you don't hear "asterisk asterisk bold asterisk asterisk".
+- **🎙 Hands-free** (header toggle, implies Speak) — after the assistant finishes speaking, the mic auto-restarts. True back-and-forth without touching the keyboard. Disabled if the browser lacks `SpeechRecognition`.
+- **🎤 Mic** (next to Send) — click to record. Textarea placeholder changes to "Listening… (speak now)" and the button turns red and pulses. The recogniser auto-stops on silence; the transcript is auto-submitted as a new chat turn via `do_send_text`. Click again (button shows ■) to cancel mid-listen. Disabled in Firefox (no STT) and while another request is loading.
+
+### How it works
+
+**Single point of JS interop**: a constant `SPEECH_INSTALL_JS` in `src/app/pages/conversational_ai.rs` is run once on page mount via `dioxus::document::eval(...)`. It installs `window.RoonSpeech` with four Promise-based methods:
+
+```
+window.RoonSpeech.startListening()  → Promise<String>   (transcript or rejects)
+window.RoonSpeech.stopListening()
+window.RoonSpeech.speak(markdown)   → Promise<void>     (markdown stripped internally)
+window.RoonSpeech.cancelSpeech()
+window.RoonSpeech.isSttSupported    : bool
+```
+
+The `eval()` script returns `!!window.RoonSpeech.isSttSupported` so the WASM side can flip a `stt_supported` signal that drives the disabled state of the mic + Hands-free buttons.
+
+**Per-action eval calls**: each user action (mic click, post-reply speak, post-speak listen) spawns a fresh `dioxus::document::eval(...)` and `.await`s its `.join::<T>()`. The script does the work and either `dioxus.send(value)` or returns a value. No long-lived Closures, no leaked callback handles.
+
+**TTS markdown stripping** happens in JS via a `plainify(md)` regex pipeline — drops fences, asterisks, headers, list bullets, link syntax, hr lines, and collapses paragraph breaks into ". " separators. Adequate for natural-sounding TTS; not perfect but doesn't need to be.
+
+**Continuous loop**: after `do_send_text` receives a reply, if `speak_enabled` is on it `await`s `RoonSpeech.speak(markdown)`. When that resolves (utterance.onend fires), if `continuous` is on it calls `start_listening_task` again — which kicks off the next mic capture, which auto-submits, which gets a reply, which gets spoken, etc.
+
+**SpeechCtx struct** bundles the three relevant signals (`speak_enabled`, `continuous`, `listening`) and is `Copy + Clone` (since `Signal<T>` is `Copy` in Dioxus). Threaded through `do_send`, `do_send_text`, and `start_listening_task` so any of them can read/update voice state.
+
+### No new crate dependencies
+
+All speech handling lives in JS via `dioxus::document::eval`. No `web-sys` feature flags added. No new Cargo deps. The Rust↔JS messaging surface is just `Eval::join::<serde_json::Value>().await`.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/app/pages/conversational_ai.rs` | Added `SpeechCtx` struct, `SPEECH_INSTALL_JS` constant (the JS module), `start_listening_task` helper, three new signals (`speak_enabled`, `continuous`, `listening`, `stt_supported`); threaded `speech: SpeechCtx` through `do_send` / `do_send_text`; added 🔊 / 🎙 toggle buttons to header; added 🎤 mic button next to Send; modified `do_send_text` to optionally speak the reply and re-listen after speech ends |
+
+No other files touched. The original `/ai` page and the JSON wire protocol are unchanged.
+
+### Browser caveats
+
+| Browser | STT (mic) | TTS (speak) |
+|---|---|---|
+| Chrome / Edge / Safari | ✅ (cloud-based in Chrome — needs internet) | ✅ |
+| Firefox | ❌ no `SpeechRecognition` | ✅ |
+| Edge on Windows | ✅ | ✅ — **also ships Microsoft neural voices for free** ("Ava Online (Natural)", "Andrew Online (Natural)"), much better than the basic ones |
+
+First mic click triggers the browser's microphone permission prompt.
+
+### Known limitations / next steps
+
+- **Default TTS voice is usually the worst one.** Browsers expose `speechSynthesis.getVoices()` which lists every installed voice. Most systems have neural voices already (especially Edge on Windows). A voice-picker dropdown that lists them and remembers the choice in localStorage is ~30 min of work and dramatically improves the experience for free.
+- **Cloud TTS for studio quality**: a future `/api/tts` route could proxy to OpenAI TTS (~$15/M chars) or ElevenLabs (~10× cost, top quality). Client plays the returned MP3 via an `<audio>` element. Half a day of work. Not yet needed — the free local voices are usually sufficient.
+- **No voice activity detection / wake word** — Hands-free always restarts the mic right after a reply. A "Hey Roon" wake word would let the page stay listening passively. Out of scope for v1.
+
+---
+
+## Recent Work (2026-04-26) — Voice Picker + Single AI Tab
+
+### Voice picker
+
+A dropdown in the Conversational AI page header (immediately left of the 🔊 Speak toggle) lists every voice the browser exposes via `speechSynthesis.getVoices()`. The choice persists in `localStorage` (`roon-ai-voice` key) and is applied to every spoken reply by setting `utterance.voice` before `speechSynthesis.speak()`.
+
+**Why this matters:** the default voice picked by the browser is almost always the worst one in the list. **Edge on Windows ships Microsoft neural voices for free** — entries containing "Online (Natural)" such as *Microsoft Ava Online (Natural)* — and they sound essentially studio-quality. Selecting one of those completely solves the "robotic TTS" problem with zero cost.
+
+**JS additions** to `RoonSpeech`:
+- `RoonSpeech.listVoices()` → `[{ name, lang, default }]`
+- `RoonSpeech.speak(md, voiceName?)` — accepts optional voice name, looks up via `getVoices().find(v => v.name === name)`, falls back to default if not found
+
+**Chrome quirk handled**: `getVoices()` returns an empty array on first call until the browser fires `voiceschanged`. A separate `LIST_VOICES_JS` script in `conversational_ai.rs` waits for that event (or polls up to 2s) before resolving, so the dropdown always populates correctly.
+
+**Rust additions** in `src/app/pages/conversational_ai.rs`:
+- `VoiceInfo { name, lang, default }` — deserialised from the JS array
+- `voices: Signal<Vec<VoiceInfo>>` — populated on mount
+- `selected_voice: Signal<String>` — bound to dropdown, hydrated from localStorage
+- `selected_voice` added to `SpeechCtx` and threaded through `do_send_text`'s speak step — passed as the second argument to `RoonSpeech.speak`
+- `load_voice_choice()` / `save_voice_choice()` helpers (wasm-gated, mirroring the conversation persistence pattern)
+
+**Browser support for voice quality**:
+- Edge / Windows: ships Microsoft "Natural" neural voices — best free option
+- Chrome / Windows: only basic voices unless Microsoft voices are installed system-wide via Settings → Time & Language → Speech → Add voice
+- Chrome / macOS: ships some "Enhanced" voices (e.g. Samantha Enhanced) — okay quality
+- Safari / macOS: ships system voices — same set as macOS
+- Firefox: all platforms — basic voices only, but TTS works
+
+### Single AI tab — `/ai` removed
+
+The original `/ai` page (single-shot, no history) has been deleted. The Conversational AI page at `/conversational` is now the only AI surface in the UI.
+
+**Why:** the conversational version is strictly better — it includes everything the old page did (zone picker, suggestions + ▶ Play, tool log, default-zone star) plus persistent history, voice in/out, and the voice picker. There's no reason to keep two AI tabs.
+
+**Removed:**
+- `Route::AiChat {}` enum variant + `/ai` route
+- `AiChat` import from `src/app/mod.rs`
+- `mod ai_chat;` + `pub use ai_chat::AiChat;` from `src/app/pages/mod.rs`
+- "AI" nav links (desktop + mobile) from `src/app/components/nav.rs`
+- File `src/app/pages/ai_chat.rs` (~190 lines) deleted
+
+**Kept** (still needed by the conversational page):
+- `AiChatRequest` / `AiChatResponse` / `ai_chat()` types in `src/ai/mod.rs` and `src/app/api.rs`
+- `ai_chat_handler` and `POST /api/ai/chat` route registration in `src/api/mod.rs` and `src/main.rs`
+
+### Web UI routes (updated)
+
+| Route | Page | Purpose |
+|---|---|---|
+| `/` | Zones | All zones, now-playing, transport + volume controls |
+| `/conversational` | Conversational AI | Persistent multi-turn chat with voice in/out and voice picker |
+| `/library` | Library | Browse Roon library |
+| `/knobs` | Knobs | ESP32 firmware management |
+| `/settings` | Settings | Adapter enable/disable |
+
+The `/ai` URL now 404s. Any saved bookmarks need updating to `/conversational`.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/app/pages/conversational_ai.rs` | Added `VoiceInfo`, `LIST_VOICES_JS`, voice persistence helpers, `voices` + `selected_voice` signals, voice-picker dropdown in header, voice name threaded through `RoonSpeech.speak` call; extended `SPEECH_INSTALL_JS` with `listVoices()` and `speak(md, voiceName?)` |
+| `src/app/components/nav.rs` | Removed both "AI" nav links |
+| `src/app/mod.rs` | Removed `Route::AiChat` and `AiChat` import |
+| `src/app/pages/mod.rs` | Removed `ai_chat` module + export |
+| `src/app/pages/ai_chat.rs` | **Deleted** |
+
+### Optional follow-ups
+
+- **Rename `/conversational` → `/ai`**: with the old page gone, the shorter URL is more natural. ~5 line change (route, `nav_active` string, nav link). Not done — kept as-is to avoid breaking anyone who already bookmarked `/conversational`.
+- **Server-side cloud TTS**: still on the table for cross-device voice consistency. The free voice picker plus Edge's Microsoft Natural voices is usually good enough that this isn't needed yet.
+
+---
+
+## Recent Work (2026-04-26) — Voice Picker Moved to Settings
+
+### Change
+
+The TTS voice-picker dropdown moved out of the Conversational AI page header and into a new **Voice** section on the Settings page. The voice choice is now app-wide shared state (like theme and default zone) instead of page-local state.
+
+The Conversational AI header is now lighter — just 🔊 Speak and 🎙 Hands-free toggles. Settings owns the configuration; the AI page consumes it.
+
+### Architecture
+
+A new shared context module follows the same pattern as `theme` and `default_zone`:
+
+**`src/app/voice_context.rs`** (new, ~110 lines):
+- `VoiceInfo { name, lang, default }` — was previously page-local
+- `VoiceContext { selected: Signal<String>, voices: Signal<Vec<VoiceInfo>> }` — `Copy + Clone`
+- `use_voice_provider()` — installs context at app root, hydrates `selected` from `localStorage`, asynchronously enumerates voices via `LIST_VOICES_JS`
+- `use_voice()` — getter for any component (Settings page, Conversational AI page, future pages)
+- `VOICE_STORAGE_KEY = "roon-ai-voice"` — same localStorage key as before, so existing user choices carry over
+
+**`LIST_VOICES_JS` decoupled from RoonSpeech**: the voice-listing JS now calls `window.speechSynthesis.getVoices()` directly with the same `voiceschanged` polling fallback. It no longer depends on `RoonSpeech.listVoices` being installed, so Settings can populate the dropdown even if the user never visits the AI page first.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/app/voice_context.rs` | **New** — shared `VoiceContext` + provider + standalone `LIST_VOICES_JS` + localStorage helpers |
+| `src/app/mod.rs` | Added `pub mod voice_context;` and `use_voice_provider()` call alongside the other providers in the App component |
+| `src/app/pages/settings.rs` | Added **Voice** `<section>` between Features and Appearance with the dropdown bound to `voice_ctx.set(...)`; includes hint about Edge neural voices |
+| `src/app/pages/conversational_ai.rs` | Removed `VoiceInfo`, `VOICE_STORAGE_KEY`, `LIST_VOICES_JS`, `load_voice_choice`, `save_voice_choice`, the `voices` and `selected_voice` local signals, and the dropdown UI from the header. Now reads `voice_ctx.selected` from `use_voice()` and threads it into `SpeechCtx.selected_voice` so `RoonSpeech.speak(md, voiceName)` still receives the chosen voice |
+
+### Reactivity
+
+Because `selected_voice` is a `Signal<String>` shared by reference (Dioxus signals are `Copy`-by-value but read/write through the same backing store), changing the voice in Settings takes effect on the AI page immediately — no reload required. The next spoken reply uses the new voice.
+
+### Backward compatibility
+
+The `localStorage` key (`roon-ai-voice`) is unchanged, so any voice choice the user already saved continues to work after this refactor. No migration needed.

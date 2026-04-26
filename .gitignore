@@ -11,6 +11,16 @@ firmware/version.json
 
 # Tailwind standalone CLI binary (downloaded via `make setup-tailwind`)
 /tailwindcss
+/tailwindcss.exe
+
+# Rustup installer (downloaded once during dev setup)
+/rustup-init.exe
+
+# Visual Studio workspace state (per-developer)
+.vs/
+
+# Local launcher script (per-developer paths)
+/start-roon-ai.ps1
 
 # Open Horizon Labs tools
 .superego/

@@ -320,17 +320,43 @@ pub struct AiChatRequest {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone_id: Option<String>,
+    /// Prior turns to send back to the server. Roles: "user" | "assistant".
+    /// Used by the Conversational AI page; empty for the legacy /ai page.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<HistoryTurn>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HistoryTurn {
+    pub role: String,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct AiChatResponse {
     #[serde(default)]
     pub response: String,
+    /// Raw markdown of the assistant's reply (suggestions block stripped).
+    /// Clients should store this and replay it as the assistant turn's `text`
+    /// in the next request's `history`.
+    #[serde(default)]
+    pub response_markdown: String,
     #[serde(default)]
     pub actions: Vec<String>,
+    #[serde(default)]
+    pub suggestions: Vec<Suggestion>,
     /// Set when the server returns an error JSON
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Suggestion {
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
 }
 
 pub async fn ai_chat(req: AiChatRequest) -> Result<AiChatResponse, String> {

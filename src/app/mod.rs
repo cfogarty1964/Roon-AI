@@ -13,12 +13,14 @@ pub mod pages;
 pub mod settings_context;
 pub mod sse;
 pub mod theme;
+pub mod voice_context;
 
 use default_zone::use_default_zone_provider;
-use pages::{AiChat, Knobs, Library, Settings, Zones};
+use pages::{ConversationalAi, Knobs, Library, Settings, Zones};
 use settings_context::use_settings_provider;
 use sse::use_sse_provider;
 use theme::use_theme_provider;
+use voice_context::use_voice_provider;
 
 /// Root app component with routing
 #[component]
@@ -35,6 +37,9 @@ pub fn App() -> Element {
     // Initialize default-zone context at app root (persisted to localStorage)
     use_default_zone_provider();
 
+    // Initialize voice-picker context at app root (persisted to localStorage)
+    use_voice_provider();
+
     rsx! {
         Router::<Route> {}
     }
@@ -45,8 +50,8 @@ pub fn App() -> Element {
 pub enum Route {
     #[route("/")]
     Zones {},
-    #[route("/ai")]
-    AiChat {},
+    #[route("/conversational")]
+    ConversationalAi {},
     #[route("/library")]
     Library {},
     #[route("/knobs")]

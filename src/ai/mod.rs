@@ -19,12 +19,38 @@ use serde_json::{json, Value};
 pub struct AiChatRequest {
     pub message: String,
     pub zone_id: Option<String>,
+    /// Prior turns of the conversation. Empty = first turn (legacy behaviour).
+    /// Roles are "user" or "assistant"; text is plain markdown (no HTML, no
+    /// suggestions sentinel block).
+    #[serde(default)]
+    pub history: Vec<HistoryTurn>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryTurn {
+    pub role: String,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct AiChatResponse {
+    /// Rendered HTML for display in the assistant bubble.
     pub response: String,
+    /// Raw markdown (suggestions block stripped) — clients should store this
+    /// and send it back in the `history` field for the next turn.
+    pub response_markdown: String,
     pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<Suggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Suggestion {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
 }
 
 // ============================================================================
@@ -184,7 +210,15 @@ You have access to tools that let you discover playback zones and control music 
 When a user asks for music 'similar to' or 'like' a specific piece, use action='radio' on a Roon zone \
 to seed Roon Radio from that track — Roon will automatically find similar music. \
 If the user doesn't specify a zone, call list_zones first and pick the most appropriate one, or ask. \
-Keep replies concise and friendly — one or two sentences confirming what you did.{}",
+Keep replies concise and friendly — one or two sentences confirming what you did. \
+\n\nWhenever your reply lists or recommends specific tracks, pieces, or albums the user could play \
+(whether or not you are playing one right now), end your reply with a machine-readable block in this exact format, \
+on its own lines, after a blank line:\n\n\
+<<<SUGGESTIONS>>>\n\
+[{{\"title\": \"Piece or track title\", \"artist\": \"Composer or performer\", \"album\": \"Album (optional)\"}}]\n\
+<<<END_SUGGESTIONS>>>\n\n\
+Rules for the block: valid JSON array only; include between 1 and 10 items; omit the block entirely if you are not recommending specific pieces. \
+Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}",
         zone_hint
     )
 }
@@ -366,10 +400,21 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
     let client = AnthropicClient::new(api_key);
     let preferred_zone = request.zone_id.as_deref();
 
-    let mut messages: Vec<Message> = vec![Message {
+    let mut messages: Vec<Message> = Vec::with_capacity(request.history.len() + 1);
+    for turn in &request.history {
+        let role = match turn.role.as_str() {
+            "user" | "assistant" => turn.role.clone(),
+            _ => continue, // skip "error" or other non-Claude roles
+        };
+        messages.push(Message {
+            role,
+            content: MessageContent::Text(turn.text.clone()),
+        });
+    }
+    messages.push(Message {
         role: "user".to_string(),
         content: MessageContent::Text(request.message.clone()),
-    }];
+    });
 
     let mut actions: Vec<String> = Vec::new();
     let mut final_text = String::new();
@@ -431,10 +476,42 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
         final_text = "Done.".to_string();
     }
 
+    let (clean_text, suggestions) = extract_suggestions(&final_text);
+
     Ok(AiChatResponse {
-        response: markdown_to_html(&final_text),
+        response: markdown_to_html(&clean_text),
+        response_markdown: clean_text,
         actions,
+        suggestions,
     })
+}
+
+/// Extract a `<<<SUGGESTIONS>>> ... <<<END_SUGGESTIONS>>>` block from Claude's
+/// reply, parse the JSON array inside, and return the text with that block
+/// removed. Silently drops the block on any parse failure so the user still
+/// sees the prose.
+fn extract_suggestions(text: &str) -> (String, Vec<Suggestion>) {
+    const START: &str = "<<<SUGGESTIONS>>>";
+    const END: &str = "<<<END_SUGGESTIONS>>>";
+
+    let Some(start_idx) = text.find(START) else {
+        return (text.to_string(), Vec::new());
+    };
+    let after_start = start_idx + START.len();
+    let Some(end_rel) = text[after_start..].find(END) else {
+        return (text.to_string(), Vec::new());
+    };
+    let end_idx = after_start + end_rel;
+    let after_end = end_idx + END.len();
+
+    let json_slice = text[after_start..end_idx].trim();
+    let suggestions: Vec<Suggestion> = serde_json::from_str(json_slice).unwrap_or_default();
+
+    let mut cleaned = String::with_capacity(text.len());
+    cleaned.push_str(&text[..start_idx]);
+    cleaned.push_str(&text[after_end..]);
+
+    (cleaned.trim().to_string(), suggestions)
 }
 
 fn markdown_to_html(text: &str) -> String {

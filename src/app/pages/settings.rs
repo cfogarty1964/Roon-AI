@@ -9,6 +9,7 @@ use crate::app::components::Layout;
 use crate::app::settings_context::use_settings;
 use crate::app::sse::use_sse;
 use crate::app::theme::{use_theme, Theme};
+use crate::app::voice_context::use_voice;
 
 /// UPnP status response
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
@@ -22,6 +23,7 @@ pub fn Settings() -> Element {
     let sse = use_sse();
     let theme_ctx = use_theme();
     let settings_ctx = use_settings();
+    let voice_ctx = use_voice();
 
     // Adapter toggle signals
     let mut roon_enabled = use_signal(|| true);
@@ -198,6 +200,52 @@ pub fn Settings() -> Element {
                                 }
                                 td { class: "py-2 px-3", "Knobs" }
                                 td { class: "py-2 px-3 text-muted", "-" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Voice section — TTS voice picker for the Conversational AI page
+            section { class: "mb-8",
+                div { class: "mb-4",
+                    h2 { class: "text-xl font-semibold", "Voice" }
+                    p { class: "text-muted text-sm",
+                        "Pick the voice used for spoken replies on the Conversational AI page. Voices come from your browser/OS — for the best free quality on Windows, use Edge and look for an entry containing \"Online (Natural)\"."
+                    }
+                }
+
+                div { class: "card p-6",
+                    {
+                        let voice_list = voice_ctx.list();
+                        let current = voice_ctx.get();
+                        if voice_list.is_empty() {
+                            rsx! {
+                                p { class: "text-sm text-muted",
+                                    "No voices detected yet. If this persists, your browser may not expose a TTS voice list."
+                                }
+                            }
+                        } else {
+                            rsx! {
+                                div { class: "flex flex-col gap-2",
+                                    label { class: "text-sm font-medium", "TTS voice" }
+                                    select {
+                                        class: "input text-sm py-2 max-w-md",
+                                        value: "{current}",
+                                        onchange: move |e| voice_ctx.set(&e.value()),
+                                        option { value: "", "System default" }
+                                        for v in voice_list.iter() {
+                                            option {
+                                                value: "{v.name}",
+                                                selected: v.name == current,
+                                                "{v.name} ({v.lang})"
+                                            }
+                                        }
+                                    }
+                                    p { class: "text-xs text-muted",
+                                        "{voice_list.len()} voice(s) available. Choice persists across reloads."
+                                    }
+                                }
                             }
                         }
                     }

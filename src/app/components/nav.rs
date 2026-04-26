@@ -61,7 +61,7 @@ pub fn Nav(props: NavProps) -> Element {
                 div { class: "hidden lg:flex items-center space-x-4",
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
-                    Link { class: nav_link_class("ai"), to: Route::AiChat {}, "AI" }
+                    Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, "Conversational AI" }
                     if !hide_knobs {
                         Link { class: nav_link_class("knobs"), to: Route::Knobs {}, "Knobs" }
                     }
@@ -95,7 +95,7 @@ pub fn Nav(props: NavProps) -> Element {
                 div { class: "px-2 pt-2 pb-3 space-y-1",
                     Link { class: nav_link_class("zones"), to: Route::Zones {}, onclick: move |_| menu_open.set(false), "Zones" }
                     Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
-                    Link { class: nav_link_class("ai"), to: Route::AiChat {}, onclick: move |_| menu_open.set(false), "AI" }
+                    Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, onclick: move |_| menu_open.set(false), "Conversational AI" }
                     if !hide_knobs {
                         Link { class: nav_link_class("knobs"), to: Route::Knobs {}, onclick: move |_| menu_open.set(false), "Knobs" }
                     }
