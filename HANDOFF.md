@@ -1612,3 +1612,52 @@ For users on Chrome/Firefox where the bundled voices are mediocre, or for cross-
 - **Auto-fetch album tracks for context** — when AI is talking about an album, surface its track list with per-track ▶ Play buttons. Combine with #2 for "what's the third track of this?" working naturally.
 - **Binary rename** to `roon-ai.exe` — long-deferred cosmetic mismatch. See "Bigger rename" notes from 2026-04-19.
 - **Rename `/conversational` → `/ai`** — shorter URL now that the original `/ai` is gone. ~5 line change.
+
+---
+
+## Where We Stand — Status After Knob Removal (2026-04-26 evening)
+
+### Current state
+
+- **Branch `v3`** is at commit `a9989d1` on `cfogarty/v3` (personal fork). Clean tree, builds clean, server runs clean.
+- **Web UI**: Zones · Conversational AI · Library · Settings — four tabs.
+- **Conversational AI page** has: persistent multi-turn history (localStorage), ▶ Play suggestion buttons, voice input (mic), spoken replies (TTS), hands-free mode, voice picker on Settings page.
+- **Backend**: Roon adapter + UPnP adapter (UPnP disabled by default), unified ZoneAggregator, MCP server (6 tools), AI chat agent calling Anthropic Sonnet 4.6.
+- **No more**: knob HTTP routes, knob page, firmware auto-fetcher, mDNS, LMS, HQPlayer, OpenHome.
+
+### What's still on the candidate list (from the section above, ranked)
+
+1. **Stream the AI response** (~3h) — biggest perceived-quality win
+2. **Now-playing context on Conversational page** (~1h) — small change, big UX upgrade for voice mode
+3. **Multiple saved conversations / sidebar** (~half day) — power-user feature
+4. **Server-side cloud TTS** (~half day) — only if browser voices ever stop satisfying
+
+### New candidates surfaced by the knob cleanup
+
+5. **Docs cleanup** (~1h) — `README.md` and `ARCHITECTURE.md` still reference removed features:
+   - `README.md:9` says "your voice, a chat message, **a hardware knob**, or a browser"
+   - `README.md:19` lists `ESP32 Knob — hardware volume/transport knob with OTA firmware management`
+   - `README.md:110` lists `FIRMWARE_AUTO_UPDATE` env var
+   - `README.md:139` lists the `/knobs` page in the routes table
+   - `README.md:250` whole section "## roon-knob Firmware"
+   - `ARCHITECTURE.md:165` mentions `knobs.json` state file
+   - `ARCHITECTURE.md:176` lists ESP32 knob as a control surface
+   - `ARCHITECTURE.md:185` lists `/knobs` route
+   These should be deleted / replaced with descriptions of the AI/voice-driven control surface that is the actual feature set now.
+
+6. **`Cargo.toml` description update** (~30 sec) — currently `description = "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"`. Should say something like `"Natural-language Roon control bridge with AI chat and voice control"`. Matches the freshly-updated module doc-comment in `src/main.rs` and the `--help` text.
+
+7. **The "Big rename" is now much smaller** — historically the binary/crate rename from `unified-hifi-control` to `roon-ai` was a 6-step lift documented in the 2026-04-19 section. With the knob subsystem gone, the surface area shrunk significantly. What's left:
+   - `Cargo.toml` `name = "unified-hifi-control"` → `name = "roon-ai"` (renames the binary)
+   - All `use unified_hifi_control::` paths become `use roon_ai::` (cargo-fix or sed)
+   - `RUST_LOG` default in `main.rs`
+   - Config directory paths (`unified-hifi-control`, `unified-hifi`) — would need a migration step or alias
+   - MCP `name` in `.mcp.json` (would break existing Claude desktop configs that point at it; may want to keep)
+   - The Roon `extension_id` (`com.muness.unified-hifi-control`) — DON'T change; would un-pair the existing Roon Extension authorisation
+   Probably 1–2 hours now vs. the half-day it would have been before. Still optional — purely cosmetic.
+
+### What I'd actually do next
+
+If you sit down for one more session: **#1 (streaming) + #2 (now-playing context) together**. Half a day, two of the four high-impact UX items, and the page goes from "talkable to" to "feels like a living remote." Everything else can wait.
+
+If you want a fast win first: **#5 (docs cleanup)**. An hour, no code risk, ships the project as something that reads to others as what it actually is now.
