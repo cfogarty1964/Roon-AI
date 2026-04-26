@@ -24,12 +24,29 @@ pub struct AiChatRequest {
     /// suggestions sentinel block).
     #[serde(default)]
     pub history: Vec<HistoryTurn>,
+    /// Current track on the selected zone (sent by the client). Lets Claude
+    /// resolve "skip this", "more like this", "pause", etc. without the user
+    /// having to type the title.
+    #[serde(default)]
+    pub current_track: Option<CurrentTrack>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HistoryTurn {
     pub role: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CurrentTrack {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub is_playing: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -198,9 +215,27 @@ fn tools() -> Vec<Value> {
 // System prompt
 // ============================================================================
 
-fn system_prompt(preferred_zone: Option<&str>) -> String {
+fn system_prompt(preferred_zone: Option<&str>, current_track: Option<&CurrentTrack>) -> String {
     let zone_hint = preferred_zone
         .map(|z| format!("\n\nThe user has pre-selected zone: `{}`. Use this zone unless they say otherwise.", z))
+        .unwrap_or_default();
+
+    let track_hint = current_track
+        .and_then(|t| {
+            let title = t.title.as_deref().unwrap_or("").trim();
+            if title.is_empty() {
+                return None;
+            }
+            let mut s = format!("\n\nThe selected zone is currently {} '{}'", if t.is_playing { "playing" } else { "stopped on" }, title);
+            if let Some(a) = t.artist.as_deref().filter(|a| !a.is_empty()) {
+                s.push_str(&format!(" by {}", a));
+            }
+            if let Some(al) = t.album.as_deref().filter(|a| !a.is_empty()) {
+                s.push_str(&format!(" (from '{}')", al));
+            }
+            s.push_str(". When the user says 'skip this', 'pause', 'more like this', 'what is this', etc. — they are referring to this track. Use it as implicit context.");
+            Some(s)
+        })
         .unwrap_or_default();
 
     format!(
@@ -218,8 +253,9 @@ on its own lines, after a blank line:\n\n\
 [{{\"title\": \"Piece or track title\", \"artist\": \"Composer or performer\", \"album\": \"Album (optional)\"}}]\n\
 <<<END_SUGGESTIONS>>>\n\n\
 Rules for the block: valid JSON array only; include between 1 and 10 items; omit the block entirely if you are not recommending specific pieces. \
-Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}",
-        zone_hint
+Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}{}",
+        zone_hint,
+        track_hint
     )
 }
 
@@ -240,11 +276,11 @@ impl AnthropicClient {
         }
     }
 
-    async fn call(&self, messages: Vec<Message>, preferred_zone: Option<&str>) -> Result<AnthropicResponse> {
+    async fn call(&self, messages: Vec<Message>, system: String) -> Result<AnthropicResponse> {
         let body = AnthropicRequest {
             model: "claude-sonnet-4-6".to_string(),
             max_tokens: 1024,
-            system: system_prompt(preferred_zone),
+            system,
             tools: tools(),
             messages,
         };
@@ -269,6 +305,193 @@ impl AnthropicClient {
 
         serde_json::from_str::<AnthropicResponse>(&text)
             .with_context(|| format!("Failed to parse Anthropic response: {}", text))
+    }
+
+    /// Streaming variant. Calls `on_text_delta(text)` for every text fragment as
+    /// it arrives. Returns the fully assembled `AnthropicResponse` once the
+    /// stream completes (so the caller can inspect tool_use blocks and stop
+    /// reason exactly like in the non-streaming path).
+    async fn call_streaming(
+        &self,
+        messages: Vec<Message>,
+        system: String,
+        on_text_delta: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<AnthropicResponse> {
+        let body = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 1024,
+            "system": system,
+            "tools": tools(),
+            "messages": messages,
+            "stream": true,
+        });
+
+        let mut resp = self
+            .http
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to reach Anthropic API (stream)")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Anthropic API error {}: {}", status, text));
+        }
+
+        // Accumulators for the assembled response.
+        // `block_states` is indexed by the content_block index from Anthropic.
+        let mut blocks: std::collections::BTreeMap<usize, BlockBuilder> =
+            std::collections::BTreeMap::new();
+        let mut stop_reason = String::new();
+
+        // SSE parser: events are separated by "\n\n", lines within an event are
+        // either `event: <name>` or `data: <json>`.
+        let mut buffer = String::new();
+        while let Some(chunk) = resp.chunk().await.context("Failed to read SSE chunk")? {
+            let text = std::str::from_utf8(&chunk).unwrap_or("");
+            buffer.push_str(text);
+            while let Some(sep) = buffer.find("\n\n") {
+                let raw = buffer[..sep].to_string();
+                buffer.drain(..sep + 2);
+                process_sse_event(&raw, &mut blocks, &mut stop_reason, on_text_delta);
+            }
+        }
+
+        // Assemble final ContentBlock vec in index order.
+        let content: Vec<ContentBlock> = blocks
+            .into_values()
+            .filter_map(|b| b.finalize())
+            .collect();
+
+        Ok(AnthropicResponse {
+            stop_reason: if stop_reason.is_empty() {
+                "end_turn".into()
+            } else {
+                stop_reason
+            },
+            content,
+        })
+    }
+}
+
+/// In-progress content block being assembled from streaming deltas.
+enum BlockBuilder {
+    Text(String),
+    ToolUse {
+        id: String,
+        name: String,
+        input_json: String,
+    },
+}
+
+impl BlockBuilder {
+    fn finalize(self) -> Option<ContentBlock> {
+        match self {
+            BlockBuilder::Text(text) => Some(ContentBlock::Text { text }),
+            BlockBuilder::ToolUse { id, name, input_json } => {
+                let input: Value = serde_json::from_str(&input_json).unwrap_or(Value::Null);
+                Some(ContentBlock::ToolUse { id, name, input })
+            }
+        }
+    }
+}
+
+fn process_sse_event(
+    raw: &str,
+    blocks: &mut std::collections::BTreeMap<usize, BlockBuilder>,
+    stop_reason: &mut String,
+    on_text_delta: &mut (dyn FnMut(&str) + Send),
+) {
+    // Find the data: line. Anthropic always sends data:; event: is informational.
+    let data_line = raw.lines().find_map(|l| l.strip_prefix("data:").map(str::trim));
+    let Some(data) = data_line else { return };
+    if data.is_empty() {
+        return;
+    }
+    let Ok(v): std::result::Result<Value, _> = serde_json::from_str(data) else { return };
+    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match kind {
+        "content_block_start" => {
+            let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            let block = v.get("content_block");
+            let block_type = block
+                .and_then(|b| b.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            match block_type {
+                "text" => {
+                    blocks.insert(idx, BlockBuilder::Text(String::new()));
+                }
+                "tool_use" => {
+                    let id = block
+                        .and_then(|b| b.get("id"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = block
+                        .and_then(|b| b.get("name"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    blocks.insert(
+                        idx,
+                        BlockBuilder::ToolUse {
+                            id,
+                            name,
+                            input_json: String::new(),
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+        "content_block_delta" => {
+            let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+            let delta = v.get("delta");
+            let delta_type = delta
+                .and_then(|d| d.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            match delta_type {
+                "text_delta" => {
+                    let text = delta
+                        .and_then(|d| d.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if let Some(BlockBuilder::Text(buf)) = blocks.get_mut(&idx) {
+                        buf.push_str(text);
+                    }
+                    on_text_delta(text);
+                }
+                "input_json_delta" => {
+                    let partial = delta
+                        .and_then(|d| d.get("partial_json"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    if let Some(BlockBuilder::ToolUse { input_json, .. }) = blocks.get_mut(&idx) {
+                        input_json.push_str(partial);
+                    }
+                }
+                _ => {}
+            }
+        }
+        "message_delta" => {
+            if let Some(reason) = v
+                .get("delta")
+                .and_then(|d| d.get("stop_reason"))
+                .and_then(|s| s.as_str())
+            {
+                *stop_reason = reason.to_string();
+            }
+        }
+        // message_start, content_block_stop, message_stop, ping → ignore
+        _ => {}
     }
 }
 
@@ -398,7 +621,7 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
         .ok_or_else(|| anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in unified-hifi-control.toml."))?;
 
     let client = AnthropicClient::new(api_key);
-    let preferred_zone = request.zone_id.as_deref();
+    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref());
 
     let mut messages: Vec<Message> = Vec::with_capacity(request.history.len() + 1);
     for turn in &request.history {
@@ -421,7 +644,7 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
 
     // Cap at 10 iterations to prevent runaway tool chains
     for _ in 0..10 {
-        let resp = client.call(messages.clone(), preferred_zone).await?;
+        let resp = client.call(messages.clone(), system.clone()).await?;
 
         if resp.stop_reason == "end_turn" {
             // Extract the text reply
@@ -484,6 +707,173 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
         actions,
         suggestions,
     })
+}
+
+// ============================================================================
+// Streaming agent — emits live events while the agent runs
+// ============================================================================
+
+/// Events emitted by the streaming agent. Serialised as JSON over SSE.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StreamEvent {
+    /// Append `text` to the in-progress assistant bubble.
+    Text { text: String },
+    /// A tool was just invoked. `summary` is `name(arg=value, ...)`.
+    Tool { summary: String },
+    /// Stream completed. Includes both raw markdown (for replay context in
+    /// the next request's history) and the rendered HTML (for the bubble).
+    Done {
+        response: String,
+        response_markdown: String,
+        suggestions: Vec<Suggestion>,
+    },
+    /// Fatal error. The client should display this and stop the stream.
+    Error { message: String },
+}
+
+/// Streaming agentic loop. Consumes the same `AiChatRequest` as `run_agent`
+/// but pushes incremental updates into `tx`. The caller wraps the receiver
+/// in an SSE response.
+///
+/// Text deltas are streamed live as they arrive from Claude. Tool calls are
+/// announced via `Tool` events as soon as they fire. The final `Done` event
+/// includes the suggestions sentinel parse and the cleaned markdown for the
+/// client to store as the assistant turn's text.
+pub async fn run_agent_streaming(
+    request: AiChatRequest,
+    state: AppState,
+    tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+) {
+    if let Err(e) = run_agent_streaming_inner(request, state, &tx).await {
+        let _ = tx.send(StreamEvent::Error {
+            message: e.to_string(),
+        });
+    }
+}
+
+async fn run_agent_streaming_inner(
+    request: AiChatRequest,
+    state: AppState,
+    tx: &tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+) -> Result<()> {
+    let api_key = state
+        .anthropic_api_key
+        .clone()
+        .ok_or_else(|| {
+            anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in unified-hifi-control.toml.")
+        })?;
+
+    let client = AnthropicClient::new(api_key);
+    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref());
+
+    let mut messages: Vec<Message> = Vec::with_capacity(request.history.len() + 1);
+    for turn in &request.history {
+        let role = match turn.role.as_str() {
+            "user" | "assistant" => turn.role.clone(),
+            _ => continue,
+        };
+        messages.push(Message {
+            role,
+            content: MessageContent::Text(turn.text.clone()),
+        });
+    }
+    messages.push(Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(request.message.clone()),
+    });
+
+    let mut full_text = String::new();
+    // Once Claude writes the suggestions sentinel, we stop forwarding text to
+    // the client (the JSON inside the block isn't user-visible content).
+    let mut suggestions_emitted = false;
+
+    for _ in 0..10 {
+        // Stream this iteration. Text deltas go to the client AND get appended
+        // to `full_text` so we can run extract_suggestions at the end.
+        let mut delta_cb = |delta: &str| {
+            let prev_len = full_text.len();
+            full_text.push_str(delta);
+
+            if suggestions_emitted {
+                return;
+            }
+
+            if let Some(marker_pos) = full_text.find("<<<SUGGESTIONS>>>") {
+                suggestions_emitted = true;
+                if marker_pos > prev_len {
+                    let bytes_in_delta = marker_pos - prev_len;
+                    // Snap to a UTF-8 char boundary to avoid splitting a codepoint.
+                    let safe_end = (0..=bytes_in_delta.min(delta.len()))
+                        .rev()
+                        .find(|&i| delta.is_char_boundary(i))
+                        .unwrap_or(0);
+                    if safe_end > 0 {
+                        let _ = tx.send(StreamEvent::Text {
+                            text: delta[..safe_end].to_string(),
+                        });
+                    }
+                }
+                return;
+            }
+
+            let _ = tx.send(StreamEvent::Text {
+                text: delta.to_string(),
+            });
+        };
+
+        let resp = client
+            .call_streaming(messages.clone(), system.clone(), &mut delta_cb)
+            .await?;
+
+        if resp.stop_reason == "end_turn" {
+            break;
+        }
+
+        if resp.stop_reason == "tool_use" {
+            // Append assistant message with the tool_use blocks
+            messages.push(Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(resp.content.clone()),
+            });
+
+            let mut result_blocks: Vec<ContentBlock> = Vec::new();
+            for block in &resp.content {
+                if let ContentBlock::ToolUse { id, name, input } = block {
+                    tracing::debug!("AI tool call (stream): {} {:?}", name, input);
+                    let result = execute_tool(name, input, &state).await;
+                    let _ = tx.send(StreamEvent::Tool {
+                        summary: format!("{}({})", name, summarise_input(input)),
+                    });
+                    result_blocks.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: result,
+                    });
+                }
+            }
+
+            messages.push(Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(result_blocks),
+            });
+        } else {
+            break;
+        }
+    }
+
+    if full_text.is_empty() {
+        full_text = "Done.".to_string();
+    }
+
+    let (clean_text, suggestions) = extract_suggestions(&full_text);
+
+    let _ = tx.send(StreamEvent::Done {
+        response: markdown_to_html(&clean_text),
+        response_markdown: clean_text,
+        suggestions,
+    });
+
+    Ok(())
 }
 
 /// Extract a `<<<SUGGESTIONS>>> ... <<<END_SUGGESTIONS>>>` block from Claude's

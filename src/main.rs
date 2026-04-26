@@ -195,6 +195,7 @@ mod server {
             .route("/api/settings", post(api::api_settings_post_handler))
             // AI chat
             .route("/api/ai/chat", post(api::ai_chat_handler))
+            .route("/api/ai/chat/stream", post(api::ai_chat_stream_handler))
             // Event stream (SSE)
             .route("/events", get(api::events_handler))
             // Zones JSON for the web UI

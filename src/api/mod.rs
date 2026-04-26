@@ -997,3 +997,25 @@ pub async fn ai_chat_handler(
     }
 }
 
+/// Streaming variant — returns Server-Sent Events as the agent runs.
+/// Each event's `data` is a JSON-serialised `StreamEvent` (text / tool / done /
+/// error). The client appends text deltas to the in-progress assistant bubble
+/// and finalises with the `done` event's metadata (suggestions, markdown).
+pub async fn ai_chat_stream_handler(
+    State(state): State<AppState>,
+    Json(req): Json<crate::ai::AiChatRequest>,
+) -> impl IntoResponse {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<crate::ai::StreamEvent>();
+
+    tokio::spawn(async move {
+        crate::ai::run_agent_streaming(req, state, tx).await;
+    });
+
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).map(|event| {
+        let json = serde_json::to_string(&event).unwrap_or_else(|_| "{}".to_string());
+        Ok::<_, std::convert::Infallible>(Event::default().data(json))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+

@@ -1661,3 +1661,68 @@ For users on Chrome/Firefox where the bundled voices are mediocre, or for cross-
 If you sit down for one more session: **#1 (streaming) + #2 (now-playing context) together**. Half a day, two of the four high-impact UX items, and the page goes from "talkable to" to "feels like a living remote." Everything else can wait.
 
 If you want a fast win first: **#5 (docs cleanup)**. An hour, no code risk, ships the project as something that reads to others as what it actually is now.
+
+---
+
+## Recent Work (2026-04-26 evening) — Streaming Responses + Now-Playing Context
+
+Both #1 and #2 from the candidate list landed in one session. The Conversational AI page now feels like a live remote.
+
+### #1 — Streaming responses
+
+Replaced the synchronous `/api/ai/chat` POST-then-wait-3-to-8-seconds-for-the-spinner with Server-Sent Events. The assistant bubble now types itself out as Claude generates the reply.
+
+**Server flow**:
+- New endpoint `POST /api/ai/chat/stream` returning `text/event-stream`. The original `POST /api/ai/chat` is preserved (unused for now, kept for any out-of-tree callers / future curl testing).
+- New `crate::ai::run_agent_streaming` runs the same agentic loop as `run_agent` but spawns text deltas onto an `mpsc::UnboundedSender<StreamEvent>` channel.
+- `StreamEvent` is a tagged enum (`text` / `tool` / `done` / `error`) serialised as JSON in each SSE `data:` payload.
+- `AnthropicClient::call_streaming` makes a `stream: true` request to `/v1/messages` and parses the SSE event chunks line-by-line. Text deltas flow through the `on_text_delta` callback; tool_use blocks are buffered and assembled at end.
+- The agent loop runs the streaming variant for every iteration. On `tool_use` stop, tools are executed synchronously (each one fires a `Tool` event for the right column), then the loop continues with results. On `end_turn`, a `Done` event with the rendered HTML, raw markdown, and parsed suggestions closes the stream.
+- `<<<SUGGESTIONS>>>` filtering: text deltas containing the sentinel are truncated server-side so the user never sees the raw JSON block typed out, even briefly.
+
+**Client flow**:
+- A `dioxus::document::eval(STREAM_CONSUMER_JS)` task does the actual `fetch` against the streaming endpoint, parses the SSE format, and forwards each event back to Rust via `dioxus.send`. Rust loops on `eval.recv::<AgentEvent>().await` and dispatches based on `kind`.
+- `ChatMessage` gained a `streaming: bool` field. While true, the assistant bubble renders as plain text (whitespace-preserved) with a pulsing cursor at the end. On `Done`, `text` is replaced with the server's rendered HTML and `streaming` flips to false (the bubble switches to `dangerous_inner_html`).
+- The old "loading dots" indicator was removed — the streaming bubble's cursor pulse is the loading indicator now. The right-column "⚡ calling…" pulse stays for the case where the agent is between tool calls.
+
+### #2 — Now-playing context
+
+A small banner above the chat shows the current track on the selected zone. Critically, that same data is sent to Claude in every request so commands like *"skip this"*, *"more like this"*, or *"what is this?"* resolve without the user having to type the title.
+
+**Server flow**:
+- `AiChatRequest` gained `current_track: Option<CurrentTrack>` where `CurrentTrack { title, artist?, album?, is_playing }`.
+- `system_prompt` now takes `current_track` as a second argument and appends:
+  > "The selected zone is currently playing 'Title' by Artist (from 'Album'). When the user says 'skip this', 'pause', 'more like this', 'what is this', etc. — they are referring to this track. Use it as implicit context."
+- Both `run_agent` and `run_agent_streaming` thread the track through. The system prompt is computed once per turn and passed into `AnthropicClient::call` / `call_streaming` (which lost their `preferred_zone` parameter — system-prompt construction lifted out into the agent loop).
+
+**Client flow**:
+- The shared `Zone` type in `src/app/api.rs` gained `state: Option<String>` and `now_playing: Option<ZoneNowPlaying>` fields. Existing callers see no change because both are `#[serde(default)]`.
+- `ZoneNowPlaying { title, artist, album, image_key? }` mirrors the relevant subset of the bus's `NowPlaying`.
+- `conversational_ai.rs` derives a `current_track: Signal<Option<CurrentTrack>>` from the latest `/zones` payload + the selected zone in a `use_effect`.
+- The page subscribes to the SSE context's `should_refresh_zones()` and calls `zones.restart()` when `ZoneUpdated` / `NowPlayingChanged` / `VolumeChanged` events arrive. So the banner updates live as the track changes on the zone.
+- The banner UI is a thin pill above the chat grid: small caps "Now playing" / "On deck" tag, then track title + artist/album subline. Doesn't render at all when there's no track.
+- The track signal is threaded through `do_send`, `do_send_text`, and `start_listening_task` so voice input, suggestion ▶ Play clicks, and typed messages all carry the same context.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/ai/mod.rs` | Added `CurrentTrack` deserialisable type + `current_track` field on `AiChatRequest`. Lifted `system_prompt` to take `current_track`; `AnthropicClient::call` + `call_streaming` now take a precomputed `system: String` instead of building the prompt internally. New `StreamEvent` enum + `run_agent_streaming` + `run_agent_streaming_inner`. New `AnthropicClient::call_streaming` reading SSE chunks with `on_text_delta` callback. New `BlockBuilder` helper + `process_sse_event` parser for assembling content blocks during streaming. Suggestions sentinel filtered out of text deltas mid-stream. |
+| `src/api/mod.rs` | New `ai_chat_stream_handler` returning `Sse<Stream>`. Existing `ai_chat_handler` unchanged. |
+| `src/main.rs` | Registered `POST /api/ai/chat/stream` route. |
+| `src/app/api.rs` | Mirrored `CurrentTrack` on the shared client request type. Extended client `Zone` with `state` and `now_playing` fields; added `ZoneNowPlaying` subset type. |
+| `src/app/pages/conversational_ai.rs` | New `AgentEvent` enum (client mirror of `StreamEvent`). New `STREAM_CONSUMER_JS` (fetch + SSE parse + dioxus.send loop). `do_send_text` now opens an SSE stream via `eval`, pushes an in-progress assistant bubble, mutates it as deltas arrive, and finalises on `done`. Added `streaming: bool` to `ChatMessage`. New rendering branch for streaming bubbles (whitespace-pre + pulsing cursor) vs. finalised ones (dangerous_inner_html + suggestions). Now-playing banner above the chat grid. SSE-driven `zones.restart()` on `should_refresh_zones()`. `current_track` Signal threaded through `do_send` / `do_send_text` / `start_listening_task` / suggestion ▶ Play clicks. Removed the old loading-dots indicator. |
+| `src/app/sse.rs` | (already had `should_refresh_zones`; no change needed.) |
+
+### Behaviour changes for users
+
+- The 3–8s spinner is gone. The reply types out at Claude's pace as it generates.
+- A "Now playing" pill appears above the chat when something is playing on the selected zone. Live-updates as the track changes.
+- Voice / mic / "▶ Play" / typed message all carry the now-playing context to Claude. *"Skip this"* and *"play more like this"* now actually work without typing the title.
+- The legacy non-streaming endpoint at `POST /api/ai/chat` still exists for any external scripts/curl tests, but the page no longer uses it.
+
+### Known limitations
+
+- The server-side suggestions-block filter handles the simple case but assumes the marker won't span exactly the boundary of two text deltas in a way that splits a UTF-8 codepoint at the wrong byte. The code snaps to char boundaries to avoid that, but if Claude ever produces an exotic encoding the worst case is a momentary visible `<` character. Not currently observed.
+- TTS still waits for the whole reply (it's triggered on the `done` event). Could be upgraded to "speak as it streams" but that requires chunked TTS which the browser's `SpeechSynthesisUtterance` doesn't really support cleanly.
+- The banner uses the `/zones` payload's now_playing snapshot. If the server's bus state lags the actual playback by a second or two, so will the banner. SSE refreshes minimise this — should be fine in practice.

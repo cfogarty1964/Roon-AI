@@ -1,6 +1,7 @@
-use crate::app::api::{ai_chat, AiChatRequest, AiChatResponse, HistoryTurn, Suggestion, ZonesResponse};
+use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, Suggestion, Zone, ZonesResponse};
 use crate::app::components::Layout;
 use crate::app::default_zone::use_default_zone;
+use crate::app::sse::use_sse;
 use crate::app::voice_context::use_voice;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,8 @@ const STORAGE_KEY: &str = "roon-ai-conversation";
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct ChatMessage {
     role: Role,
-    /// Display text. For Assistant this is rendered HTML; for User/Error it's plain text.
+    /// Display text. For Assistant this is rendered HTML once streaming
+    /// finishes; while streaming it's plain text accumulating from deltas.
     text: String,
     /// Raw markdown of an assistant reply (suggestions block stripped). Used to
     /// replay this turn back to the server in subsequent requests. Empty for
@@ -22,6 +24,29 @@ struct ChatMessage {
     actions: Vec<String>,
     #[serde(default)]
     suggestions: Vec<Suggestion>,
+    /// True while the assistant turn is mid-stream. Renders as plain text
+    /// (whitespace-preserving). Once the `done` event arrives, this flips to
+    /// false and `text` becomes the rendered HTML body.
+    #[serde(default)]
+    streaming: bool,
+}
+
+/// Streaming events from the server, deserialised from each SSE message's
+/// JSON `data` payload. Mirrors `crate::ai::StreamEvent` server-side.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AgentEvent {
+    Text { text: String },
+    Tool { summary: String },
+    Done {
+        #[serde(default)]
+        response: String,
+        #[serde(default)]
+        response_markdown: String,
+        #[serde(default)]
+        suggestions: Vec<Suggestion>,
+    },
+    Error { message: String },
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -56,6 +81,7 @@ fn do_send_text(
     mut loading: Signal<bool>,
     selected_zone: Signal<String>,
     speech: SpeechCtx,
+    current_track: Signal<Option<CurrentTrack>>,
 ) {
     if msg.is_empty() || *loading.read() {
         return;
@@ -65,53 +91,104 @@ fn do_send_text(
         if z.is_empty() { None } else { Some(z) }
     };
     let history = build_history(&messages.read());
+    let track_snapshot = current_track.read().clone();
+
+    // Push the user turn + an in-progress streaming assistant bubble.
     messages.write().push(ChatMessage {
         role: Role::User,
         text: msg.clone(),
         markdown: String::new(),
         actions: vec![],
         suggestions: vec![],
+        streaming: false,
     });
+    messages.write().push(ChatMessage {
+        role: Role::Assistant,
+        text: String::new(),
+        markdown: String::new(),
+        actions: vec![],
+        suggestions: vec![],
+        streaming: true,
+    });
+    let in_progress_idx = messages.read().len() - 1;
+
     loading.set(true);
-    let req = AiChatRequest { message: msg, zone_id: zone, history };
+
+    let req = AiChatRequest {
+        message: msg,
+        zone_id: zone,
+        history,
+        current_track: track_snapshot,
+    };
+    let req_json = match serde_json::to_value(&req) {
+        Ok(v) => v,
+        Err(e) => {
+            messages.write().clear_streaming(in_progress_idx, Role::Error, format!("encode error: {}", e));
+            loading.set(false);
+            return;
+        }
+    };
+
     spawn(async move {
+        let mut eval = dioxus::document::eval(STREAM_CONSUMER_JS);
+        // Send the request body to the JS side.
+        let _ = eval.send(req_json);
+
         let mut spoken_markdown: Option<String> = None;
-        match ai_chat(req).await {
-            Ok(AiChatResponse { response, response_markdown, actions, suggestions, error: None }) => {
-                if *speech.speak_enabled.read() {
-                    spoken_markdown = Some(response_markdown.clone());
+
+        loop {
+            match eval.recv::<AgentEvent>().await {
+                Ok(AgentEvent::Text { text }) => {
+                    let mut msgs = messages.write();
+                    if let Some(m) = msgs.get_mut(in_progress_idx) {
+                        m.text.push_str(&text);
+                    }
                 }
-                messages.write().push(ChatMessage {
-                    role: Role::Assistant,
-                    text: response,
-                    markdown: response_markdown,
-                    actions,
-                    suggestions,
-                });
-            }
-            Ok(AiChatResponse { error: Some(e), .. }) => {
-                messages.write().push(ChatMessage {
-                    role: Role::Error,
-                    text: e,
-                    markdown: String::new(),
-                    actions: vec![],
-                    suggestions: vec![],
-                });
-            }
-            Err(e) => {
-                messages.write().push(ChatMessage {
-                    role: Role::Error,
-                    text: e,
-                    markdown: String::new(),
-                    actions: vec![],
-                    suggestions: vec![],
-                });
+                Ok(AgentEvent::Tool { summary }) => {
+                    let mut msgs = messages.write();
+                    if let Some(m) = msgs.get_mut(in_progress_idx) {
+                        m.actions.push(summary);
+                    }
+                }
+                Ok(AgentEvent::Done { response, response_markdown, suggestions }) => {
+                    if *speech.speak_enabled.read() {
+                        spoken_markdown = Some(response_markdown.clone());
+                    }
+                    let mut msgs = messages.write();
+                    if let Some(m) = msgs.get_mut(in_progress_idx) {
+                        m.text = response;
+                        m.markdown = response_markdown;
+                        m.suggestions = suggestions;
+                        m.streaming = false;
+                    }
+                    break;
+                }
+                Ok(AgentEvent::Error { message }) => {
+                    let mut msgs = messages.write();
+                    if let Some(m) = msgs.get_mut(in_progress_idx) {
+                        m.role = Role::Error;
+                        m.text = message;
+                        m.streaming = false;
+                    }
+                    break;
+                }
+                Err(_) => {
+                    // Stream ended without a Done event (network drop / parse failure).
+                    let mut msgs = messages.write();
+                    if let Some(m) = msgs.get_mut(in_progress_idx) {
+                        if m.streaming {
+                            m.role = Role::Error;
+                            m.text = "Stream ended unexpectedly.".to_string();
+                            m.streaming = false;
+                        }
+                    }
+                    break;
+                }
             }
         }
         loading.set(false);
 
         if let Some(md) = spoken_markdown {
-            // Speak the assistant reply, then optionally restart the mic.
             let voice = speech.selected_voice.read().clone();
             let payload = serde_json::to_string(&md).unwrap_or_else(|_| "\"\"".into());
             let voice_payload = if voice.is_empty() {
@@ -126,11 +203,69 @@ fn do_send_text(
             let _ = dioxus::document::eval(&script).join::<serde_json::Value>().await;
 
             if *speech.continuous.read() {
-                start_listening_task(messages, loading, selected_zone, speech);
+                start_listening_task(messages, loading, selected_zone, speech, current_track);
             }
         }
     });
 }
+
+trait ChatMessagesExt {
+    /// Replace the in-progress streaming turn at `idx` with a finalised one
+    /// of `role` and `text`. Used for early-exit error paths.
+    fn clear_streaming(&mut self, idx: usize, role: Role, text: String);
+}
+
+impl ChatMessagesExt for Vec<ChatMessage> {
+    fn clear_streaming(&mut self, idx: usize, role: Role, text: String) {
+        if let Some(m) = self.get_mut(idx) {
+            m.role = role;
+            m.text = text;
+            m.streaming = false;
+        }
+    }
+}
+
+/// JS module that runs a fetch+stream against `/api/ai/chat/stream`, parses
+/// SSE events, and forwards each event JSON to Rust via `dioxus.send`.
+const STREAM_CONSUMER_JS: &str = r#"
+const req = await dioxus.recv();
+try {
+    const response = await fetch('/api/ai/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req)
+    });
+    if (!response.ok) {
+        const t = await response.text();
+        dioxus.send({ kind: 'error', message: `HTTP ${response.status}: ${t}` });
+        return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const raw = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            for (const line of raw.split('\n')) {
+                if (line.startsWith('data:')) {
+                    const data = line.slice(5).trim();
+                    if (!data) continue;
+                    try {
+                        dioxus.send(JSON.parse(data));
+                    } catch (e) { /* skip malformed */ }
+                }
+            }
+        }
+    }
+} catch (e) {
+    dioxus.send({ kind: 'error', message: String(e) });
+}
+"#;
 
 /// Start mic capture in a spawned task. On result, auto-submits via do_send_text.
 fn start_listening_task(
@@ -138,6 +273,7 @@ fn start_listening_task(
     loading: Signal<bool>,
     selected_zone: Signal<String>,
     speech: SpeechCtx,
+    current_track: Signal<Option<CurrentTrack>>,
 ) {
     let mut listening = speech.listening;
     if *listening.read() || *loading.read() {
@@ -161,7 +297,7 @@ fn start_listening_task(
                 if let Some(text) = v.get("text").and_then(|t| t.as_str()) {
                     let trimmed = text.trim().to_string();
                     if !trimmed.is_empty() {
-                        do_send_text(trimmed, messages, loading, selected_zone, speech);
+                        do_send_text(trimmed, messages, loading, selected_zone, speech, current_track);
                     }
                 }
             }
@@ -262,13 +398,14 @@ fn do_send(
     loading: Signal<bool>,
     selected_zone: Signal<String>,
     speech: SpeechCtx,
+    current_track: Signal<Option<CurrentTrack>>,
 ) {
     let msg = input.read().trim().to_string();
     if msg.is_empty() || *loading.read() {
         return;
     }
     input.set(String::new());
-    do_send_text(msg, messages, loading, selected_zone, speech);
+    do_send_text(msg, messages, loading, selected_zone, speech, current_track);
 }
 
 fn play_message_for(s: &Suggestion) -> String {
@@ -365,12 +502,23 @@ pub fn ConversationalAi() -> Element {
         save_messages_to_storage(&snapshot);
     });
 
-    let zones = use_resource(|| async {
+    let mut zones = use_resource(|| async {
         crate::app::api::fetch_json::<ZonesResponse>("/zones")
             .await
             .ok()
             .map(|r| r.zones)
             .unwrap_or_default()
+    });
+
+    // Re-fetch zones whenever SSE indicates a now-playing / zone change so the
+    // banner reflects fresh state.
+    let sse = use_sse();
+    let event_count = sse.event_count;
+    use_effect(move || {
+        let _ = event_count();
+        if sse.should_refresh_zones() {
+            zones.restart();
+        }
     });
 
     use_effect(move || {
@@ -389,11 +537,39 @@ pub fn ConversationalAi() -> Element {
 
     let zone_list = zones.read().clone().unwrap_or_default();
 
-    let send = move |_: Event<MouseData>| do_send(input, messages, loading, selected_zone, speech);
+    // Now-playing for the currently selected zone, derived from the latest
+    // `/zones` payload. Updated reactively whenever zones or the zone selection
+    // changes (which itself triggers on SSE events).
+    let mut current_track: Signal<Option<CurrentTrack>> = use_signal(|| None);
+    use_effect(move || {
+        let list = zones.read().clone().unwrap_or_default();
+        let zid = selected_zone.read().clone();
+        let zone: Option<Zone> = list.iter().find(|z| z.zone_id == zid).cloned();
+        let track = zone
+            .as_ref()
+            .and_then(|z| z.now_playing.clone())
+            .filter(|np| !np.title.is_empty())
+            .map(|np| {
+                let is_playing = zone
+                    .as_ref()
+                    .and_then(|z| z.state.as_deref())
+                    .map(|s| s.eq_ignore_ascii_case("playing"))
+                    .unwrap_or(false);
+                CurrentTrack {
+                    title: Some(np.title),
+                    artist: if np.artist.is_empty() { None } else { Some(np.artist) },
+                    album: if np.album.is_empty() { None } else { Some(np.album) },
+                    is_playing,
+                }
+            });
+        current_track.set(track);
+    });
+
+    let send = move |_: Event<MouseData>| do_send(input, messages, loading, selected_zone, speech, current_track);
 
     let on_keydown = move |e: Event<KeyboardData>| {
         if e.key() == Key::Enter && !e.modifiers().shift() {
-            do_send(input, messages, loading, selected_zone, speech);
+            do_send(input, messages, loading, selected_zone, speech, current_track);
         }
     };
 
@@ -405,7 +581,7 @@ pub fn ConversationalAi() -> Element {
                     .join::<serde_json::Value>().await;
             });
         } else {
-            start_listening_task(messages, loading, selected_zone, speech);
+            start_listening_task(messages, loading, selected_zone, speech, current_track);
         }
     };
 
@@ -529,6 +705,39 @@ pub fn ConversationalAi() -> Element {
                 }
             }
 
+            // Now-playing banner — shown when the selected zone has a track.
+            // Gives Claude implicit context for "skip this", "more like this", etc.
+            {
+                let track = current_track.read().clone();
+                rsx! {
+                    if let Some(t) = track {
+                        div { class: "mb-4 flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm",
+                            span { class: "text-xs text-muted uppercase tracking-wider",
+                                if t.is_playing { "Now playing" } else { "On deck" }
+                            }
+                            div { class: "flex flex-col flex-1 min-w-0",
+                                span { class: "font-medium truncate",
+                                    "{t.title.clone().unwrap_or_default()}"
+                                }
+                                {
+                                    let parts: Vec<String> = [t.artist.clone(), t.album.clone()]
+                                        .into_iter()
+                                        .flatten()
+                                        .filter(|s| !s.is_empty())
+                                        .collect();
+                                    if !parts.is_empty() {
+                                        let line = parts.join(" — ");
+                                        rsx! { span { class: "text-xs text-muted truncate", "{line}" } }
+                                    } else {
+                                        rsx! {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             div { class: "grid grid-cols-1 lg:grid-cols-2 gap-6 items-start",
 
                 div { class: "flex flex-col gap-3",
@@ -550,6 +759,7 @@ pub fn ConversationalAi() -> Element {
                             {
                                 let text = msg.text.clone();
                                 let suggestions = msg.suggestions.clone();
+                                let is_streaming = msg.streaming;
                                 match msg.role {
                                     Role::User => rsx! {
                                         div {
@@ -559,9 +769,20 @@ pub fn ConversationalAi() -> Element {
                                     },
                                     Role::Assistant => rsx! {
                                         div { class: "self-start max-w-[90%] flex flex-col gap-2",
-                                            div {
-                                                class: "rounded-2xl rounded-bl-sm bg-muted px-4 py-3 ai-prose",
-                                                dangerous_inner_html: "{text}",
+                                            if is_streaming {
+                                                // Plain-text rendering with whitespace preservation
+                                                // while the stream is in flight. Switches to
+                                                // dangerous_inner_html on the Done event.
+                                                div {
+                                                    class: "rounded-2xl rounded-bl-sm bg-muted px-4 py-3 text-sm whitespace-pre-wrap",
+                                                    "{text}"
+                                                    span { class: "inline-block w-2 h-4 ml-0.5 bg-muted-foreground/60 animate-pulse align-middle" }
+                                                }
+                                            } else {
+                                                div {
+                                                    class: "rounded-2xl rounded-bl-sm bg-muted px-4 py-3 ai-prose",
+                                                    dangerous_inner_html: "{text}",
+                                                }
                                             }
                                             if !suggestions.is_empty() {
                                                 div { class: "flex flex-col gap-1 ml-2",
@@ -580,7 +801,7 @@ pub fn ConversationalAi() -> Element {
                                                                     button {
                                                                         class: "btn-primary px-2 py-0.5 text-xs disabled:opacity-50",
                                                                         disabled: is_loading,
-                                                                        onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech),
+                                                                        onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track),
                                                                         "▶ Play"
                                                                     }
                                                                     span { class: "truncate", "{label}" }
@@ -602,13 +823,8 @@ pub fn ConversationalAi() -> Element {
                             }
                         }
 
-                        if *loading.read() {
-                            div { class: "self-start flex gap-1 px-4 py-2",
-                                span { class: "h-2 w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:-0.3s]" }
-                                span { class: "h-2 w-2 rounded-full bg-muted-foreground animate-bounce [animation-delay:-0.15s]" }
-                                span { class: "h-2 w-2 rounded-full bg-muted-foreground animate-bounce" }
-                            }
-                        }
+                        // The in-progress assistant bubble's pulsing cursor is
+                        // now the loading indicator (see is_streaming branch above).
                     }
 
                     div { class: "flex gap-2 sticky bottom-4 mt-2",

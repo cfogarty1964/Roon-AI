@@ -49,13 +49,34 @@ pub struct AppSettings {
 pub struct Zone {
     pub zone_id: String,
     pub zone_name: String,
+    #[serde(default)]
     pub source: Option<String>,
+    #[serde(default)]
     pub dsp: Option<ZoneDsp>,
+    /// State string from the server's bus zone — "playing", "paused", "stopped", etc.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Currently playing track on this zone (subset of fields).
+    #[serde(default)]
+    pub now_playing: Option<ZoneNowPlaying>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ZoneDsp {
     pub r#type: Option<String>,
+}
+
+/// Subset of the bus's NowPlaying that the AI page consumes for context.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ZoneNowPlaying {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+    #[serde(default)]
+    pub album: String,
+    #[serde(default)]
+    pub image_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -249,6 +270,22 @@ pub struct AiChatRequest {
     /// Used by the Conversational AI page; empty for the legacy /ai page.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryTurn>,
+    /// What's currently playing on the selected zone, if anything. Sent so
+    /// Claude can resolve context-dependent commands like "skip this".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_track: Option<CurrentTrack>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CurrentTrack {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub is_playing: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
