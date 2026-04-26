@@ -1726,3 +1726,57 @@ A small banner above the chat shows the current track on the selected zone. Crit
 - The server-side suggestions-block filter handles the simple case but assumes the marker won't span exactly the boundary of two text deltas in a way that splits a UTF-8 codepoint at the wrong byte. The code snaps to char boundaries to avoid that, but if Claude ever produces an exotic encoding the worst case is a momentary visible `<` character. Not currently observed.
 - TTS still waits for the whole reply (it's triggered on the `done` event). Could be upgraded to "speak as it streams" but that requires chunked TTS which the browser's `SpeechSynthesisUtterance` doesn't really support cleanly.
 - The banner uses the `/zones` payload's now_playing snapshot. If the server's bus state lags the actual playback by a second or two, so will the banner. SSE refreshes minimise this — should be fine in practice.
+
+---
+
+## Where We Stand — Status After Streaming + Now-Playing (2026-04-26 late evening)
+
+### Current state
+
+- **Branch `v3`** at `88f2f5f` on `cfogarty/v3`. Builds clean, runs clean.
+- **Conversational AI page** is now a genuinely live remote: streaming replies, now-playing context, voice in/out, hands-free mode, voice picker on Settings, persistent history, ▶ Play suggestion buttons.
+- **Web UI**: Zones · Conversational AI · Library · Settings.
+- **Backend**: Roon adapter + UPnP adapter (UPnP off by default), unified ZoneAggregator, MCP server (6 tools), AI agent calling Anthropic Sonnet 4.6 over a streaming SSE bridge.
+
+### Candidate list — what's done vs what's left
+
+From the original "Next Session — Candidate Work Items" section:
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Stream the AI response (~3h) | ✅ **Done** (commit `88f2f5f`) |
+| 2 | Now-playing context on Conversational page (~1h) | ✅ **Done** (commit `88f2f5f`) |
+| 3 | Multiple saved conversations / sidebar (~half day) | Not started |
+| 4 | Server-side cloud TTS (~half day, ~$) | Not started |
+| 5 | Docs cleanup — `README.md` + `ARCHITECTURE.md` still mention removed features (~1h) | Not started |
+| 6 | `Cargo.toml` description update (~30s) | Not started |
+| 7 | The "Big rename" (`unified-hifi-control` → `roon-ai`) (~1–2h) | Not started |
+
+### What's still on the table (and why each one matters now)
+
+**#3 — Multiple saved conversations.** With streaming + now-playing landed, a single conversation can stretch quite long without the page feeling sluggish. The next ergonomic win is being able to keep a "late-night jazz" thread distinct from a "workout pump-up" thread. ChatGPT-style sidebar; ~half day; storage spec already drafted in the candidate list above.
+
+**#4 — Server-side cloud TTS.** The browser-native voice picker (Edge's "Online (Natural)" voices in particular) is genuinely good. This is now lower priority than it felt when first listed — only worth doing if you want consistent voice across browsers/devices, or if a non-Edge user cares about quality.
+
+**#5 — Docs cleanup.** Still relevant. Specifically, `README.md` lines 9, 19, 110, 139, 250 and `ARCHITECTURE.md` lines 165, 176, 185 still mention knobs/firmware that were ripped out. ~1 hour, no code risk, makes the project read to outsiders as what it actually is.
+
+**#6 — `Cargo.toml` description.** Still says `"Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"`. ~30 seconds.
+
+**#7 — The "Big rename"** (`unified-hifi-control.exe` → `roon-ai.exe`). Cosmetic but increasingly conspicuous now that the project is so clearly "Roon AI". 1–2 hours given the slimmer codebase. Optional.
+
+### New ideas surfaced by the streaming + now-playing work
+
+8. **Per-token TTS streaming.** Right now TTS waits for the whole `done` event before speaking. With streaming text deltas already arriving, you could pipe sentences (split on `.`/`?`/`!`) into successive `SpeechSynthesisUtterance` objects so the voice starts speaking before the full reply is rendered. Feels like 2–3 hours; probably worth doing if hands-free mode becomes a primary use case. Caveat: the stock browser TTS engines don't queue beautifully, so there's some glue work.
+
+9. **Inline tool-call indicator in the chat.** Tool calls currently show only in the right column. Inlining a small `⚡ list_zones …` pill inside the streaming bubble (where the text was when the tool fired) would give a clearer "the AI paused to look something up here, then continued" sense. Small UI change, ~1 hour.
+
+10. **Pause/resume + skip buttons in the now-playing banner.** The banner currently just shows what's playing. Adding `⏸️` `⏭️` buttons would make it a mini-remote — and would compose naturally with the ▶ Play rows below. ~1 hour. Reuses the existing `/roon/control` endpoint.
+
+### Recommendation
+
+The page is genuinely good now. If you want one more session, two equally appealing paths:
+
+- **Polish the live-remote feel** — do #10 (transport buttons in the banner) + #9 (inline tool indicators). Couple of hours, makes the conversational page feel like a complete piece.
+- **Get the project ready to share** — do #5 + #6 + #7 (docs + description + binary rename). Same couple of hours, but ships the project as a coherent thing externally rather than something with stale references.
+
+Or sit with what's there. The conversational AI surface is in a notably good state — streaming + voice + history + suggestions + now-playing context all working together — and is fundamentally different from where it was at the start of the day.
