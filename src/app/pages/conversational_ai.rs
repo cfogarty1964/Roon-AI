@@ -480,6 +480,29 @@ fn do_transport(zone_id: String, action: &'static str) {
     });
 }
 
+/// Set absolute volume on a Roon zone via `POST /roon/volume`. Only used by
+/// the banner slider; UPnP zones don't expose an absolute-set endpoint and
+/// hide the slider entirely. Errors are logged but not surfaced — SSE will
+/// reflect the actual volume on the next update if the request was rejected.
+fn do_volume_set(zone_id: String, value: f32) {
+    if zone_id.is_empty() {
+        return;
+    }
+    spawn(async move {
+        let body = serde_json::json!({
+            "zone_id": zone_id,
+            "value": value,
+            "relative": false,
+        });
+        if let Err(e) = crate::app::api::post_json_no_response("/roon/volume", &body).await {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(&format!("Volume set failed: {e}").into());
+            #[cfg(not(target_arch = "wasm32"))]
+            tracing::warn!("Volume set failed: {}", e);
+        }
+    });
+}
+
 #[cfg(target_arch = "wasm32")]
 fn load_messages_from_storage(id: &str) -> Vec<ChatMessage> {
     if let Some(window) = web_sys::window() {
@@ -1019,63 +1042,144 @@ pub fn ConversationalAi() -> Element {
 
             // Now-playing banner — shown when the selected zone has a track.
             // Gives Claude implicit context for "skip this", "more like this", etc.
-            // Also exposes ⏮ / ⏯ / ⏭ buttons that hit `/roon/control` directly
-            // (faster than routing the command through the agent loop).
+            // Also exposes album-art thumbnail, ⏮ / ⏯ / ⏭ buttons (which hit
+            // `/roon/control` directly — faster than routing through the agent),
+            // and a volume slider for Roon zones (POST /roon/volume).
             {
                 let track = current_track.read().clone();
+                let zid = selected_zone.read().clone();
+                // Pull the full Zone for image_key + volume_control. Driven by
+                // the same SSE-refreshed `zones` resource as current_track, so
+                // these stay in lockstep with the rest of the banner.
+                let full_zone: Option<Zone> = zones
+                    .read()
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|z| z.zone_id == zid);
+                let image_key = full_zone
+                    .as_ref()
+                    .and_then(|z| z.now_playing.as_ref())
+                    .and_then(|np| np.image_key.clone());
+                let vc = full_zone.as_ref().and_then(|z| z.volume_control.clone());
+                let is_roon = zid.starts_with("roon:");
                 rsx! {
                     if let Some(t) = track {
-                        div { class: "mb-4 flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm",
-                            span { class: "text-xs text-muted uppercase tracking-wider",
-                                if t.is_playing { "Now playing" } else { "On deck" }
-                            }
-                            div { class: "flex flex-col flex-1 min-w-0",
-                                span { class: "font-medium truncate",
-                                    "{t.title.clone().unwrap_or_default()}"
+                        div { class: "mb-4 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm",
+                            // Top row: art, label, track text, transport buttons.
+                            div { class: "flex items-center gap-3",
+                                {
+                                    if let Some(key) = image_key.as_ref() {
+                                        let url = format!(
+                                            "/roon/image?image_key={}&width=80&height=80",
+                                            urlencoding::encode(key)
+                                        );
+                                        rsx! {
+                                            img {
+                                                src: "{url}",
+                                                alt: "",
+                                                class: "w-10 h-10 object-cover rounded-md flex-shrink-0 bg-muted"
+                                            }
+                                        }
+                                    } else {
+                                        rsx! {
+                                            div {
+                                                class: "w-10 h-10 rounded-md flex-shrink-0 bg-muted flex items-center justify-center text-muted-foreground",
+                                                "♪"
+                                            }
+                                        }
+                                    }
+                                }
+                                span { class: "text-xs text-muted uppercase tracking-wider",
+                                    if t.is_playing { "Now playing" } else { "On deck" }
+                                }
+                                div { class: "flex flex-col flex-1 min-w-0",
+                                    span { class: "font-medium truncate",
+                                        "{t.title.clone().unwrap_or_default()}"
+                                    }
+                                    {
+                                        let parts: Vec<String> = [t.artist.clone(), t.album.clone()]
+                                            .into_iter()
+                                            .flatten()
+                                            .filter(|s| !s.is_empty())
+                                            .collect();
+                                        if !parts.is_empty() {
+                                            let line = parts.join(" — ");
+                                            rsx! { span { class: "text-xs text-muted truncate", "{line}" } }
+                                        } else {
+                                            rsx! {}
+                                        }
+                                    }
                                 }
                                 {
-                                    let parts: Vec<String> = [t.artist.clone(), t.album.clone()]
-                                        .into_iter()
-                                        .flatten()
-                                        .filter(|s| !s.is_empty())
-                                        .collect();
-                                    if !parts.is_empty() {
-                                        let line = parts.join(" — ");
-                                        rsx! { span { class: "text-xs text-muted truncate", "{line}" } }
+                                    let zid_prev = zid.clone();
+                                    let zid_play = zid.clone();
+                                    let zid_next = zid.clone();
+                                    let is_playing = t.is_playing;
+                                    rsx! {
+                                        div { class: "flex items-center gap-1",
+                                            button {
+                                                class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                                "aria-label": "Previous track",
+                                                title: "Previous",
+                                                onclick: move |_| do_transport(zid_prev.clone(), "previous"),
+                                                "⏮"
+                                            }
+                                            button {
+                                                class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                                "aria-label": if is_playing { "Pause" } else { "Play" },
+                                                title: if is_playing { "Pause" } else { "Play" },
+                                                onclick: move |_| do_transport(zid_play.clone(), "play_pause"),
+                                                if is_playing { "⏸" } else { "▶" }
+                                            }
+                                            button {
+                                                class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                                "aria-label": "Next track",
+                                                title: "Next",
+                                                onclick: move |_| do_transport(zid_next.clone(), "next"),
+                                                "⏭"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Bottom row: volume slider (Roon zones with a populated VolumeControl).
+                            // UPnP zones expose only relative vol_up/vol_down via /upnp/control —
+                            // no absolute-set endpoint — so we hide the slider for them.
+                            {
+                                if is_roon {
+                                    if let Some(vc) = vc.as_ref() {
+                                        let zid_vol = zid.clone();
+                                        let unit = match vc.scale.as_deref() {
+                                            Some("decibels") => " dB",
+                                            _ => "",
+                                        };
+                                        let label = format!("{:.0}{}", vc.value, unit);
+                                        rsx! {
+                                            div { class: "flex items-center gap-3 px-1 pl-13",
+                                                span { class: "text-xs text-muted", "🔊" }
+                                                input {
+                                                    r#type: "range",
+                                                    class: "flex-1 accent-primary cursor-pointer",
+                                                    min: "{vc.min}",
+                                                    max: "{vc.max}",
+                                                    step: "{vc.step}",
+                                                    value: "{vc.value}",
+                                                    "aria-label": "Volume",
+                                                    oninput: move |e| {
+                                                        if let Ok(v) = e.value().parse::<f32>() {
+                                                            do_volume_set(zid_vol.clone(), v);
+                                                        }
+                                                    },
+                                                }
+                                                span { class: "text-xs text-muted tabular-nums w-12 text-right", "{label}" }
+                                            }
+                                        }
                                     } else {
                                         rsx! {}
                                     }
-                                }
-                            }
-                            {
-                                let zid_prev = selected_zone.read().clone();
-                                let zid_play = selected_zone.read().clone();
-                                let zid_next = selected_zone.read().clone();
-                                let is_playing = t.is_playing;
-                                rsx! {
-                                    div { class: "flex items-center gap-1",
-                                        button {
-                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
-                                            "aria-label": "Previous track",
-                                            title: "Previous",
-                                            onclick: move |_| do_transport(zid_prev.clone(), "previous"),
-                                            "⏮"
-                                        }
-                                        button {
-                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
-                                            "aria-label": if is_playing { "Pause" } else { "Play" },
-                                            title: if is_playing { "Pause" } else { "Play" },
-                                            onclick: move |_| do_transport(zid_play.clone(), "play_pause"),
-                                            if is_playing { "⏸" } else { "▶" }
-                                        }
-                                        button {
-                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
-                                            "aria-label": "Next track",
-                                            title: "Next",
-                                            onclick: move |_| do_transport(zid_next.clone(), "next"),
-                                            "⏭"
-                                        }
-                                    }
+                                } else {
+                                    rsx! {}
                                 }
                             }
                         }

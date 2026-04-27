@@ -59,6 +59,10 @@ pub struct Zone {
     /// Currently playing track on this zone (subset of fields).
     #[serde(default)]
     pub now_playing: Option<ZoneNowPlaying>,
+    /// Volume + scale info for the zone's primary output. Used by the
+    /// now-playing banner's slider on the conversational page.
+    #[serde(default)]
+    pub volume_control: Option<ZoneVolumeControl>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -77,6 +81,25 @@ pub struct ZoneNowPlaying {
     pub album: String,
     #[serde(default)]
     pub image_key: Option<String>,
+}
+
+/// Subset of the bus's VolumeControl needed by the banner slider. The bus's
+/// `scale` is a `VolumeScale` enum that serializes as a snake_case string
+/// ("number", "decibels", "incremental"); we just stash it as a string here.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ZoneVolumeControl {
+    #[serde(default)]
+    pub value: f32,
+    #[serde(default)]
+    pub min: f32,
+    #[serde(default)]
+    pub max: f32,
+    #[serde(default)]
+    pub step: f32,
+    #[serde(default)]
+    pub is_muted: bool,
+    #[serde(default)]
+    pub scale: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

@@ -2212,3 +2212,42 @@ Full release rebuild (Tailwind + dx + cargo release) and runtime smoke test pend
 ### Recommendation
 
 The conversational surface has roughly hit feature-completeness for the single-user case. Real next-session candidates are now small polish items (banner album art, per-token TTS) or release-pipeline cleanup (LMS removal, artifact rename). Use it for a few days; fixes will surface naturally.
+
+---
+
+## Recent Work (2026-04-27, fourth pass) — Banner Album Art + Volume Slider
+
+The visuals that the Zones page used to provide (album art + per-zone volume control) had been missing from the now-playing banner. Restored both without bringing back a separate page.
+
+### What landed
+
+- **Album thumbnail** in the banner. 40×40 rounded square at the left, sourced from `/roon/image?image_key={k}&width=80&height=80` (2× for retina). Falls back to a `♪` placeholder when no image_key is available.
+- **Volume slider** in a second row of the banner. Native `<input type="range">` styled with `accent-primary`, bound to the zone's `volume_control` (value/min/max/step from the bus VolumeControl). Posts to `POST /roon/volume` with `{zone_id, value, relative: false}` on every input event for live tracking. Right side shows a tabular-num readout — appends ` dB` for `decibels`-scale volumes, plain integer otherwise.
+- **UPnP zones hide the slider** — `/upnp/control` only exposes relative `vol_up`/`vol_down`, no absolute-set endpoint. Roon zones get the slider; UPnP zones get the same banner without volume control.
+
+### Why this approach
+
+- **Slider posts on every `oninput`**, not on `onchange`. Trade-off: more requests during a drag, but the volume tracks the pointer in real time which is the expected feel for a music control. Roon's volume API is synchronous and fast enough that this is fine on a LAN.
+- **Image URL constructed on the client**, not pre-baked in the API response. The `/zones` payload already carries `now_playing.image_key`; the URL pattern (`/roon/image?image_key=…&width=…`) is small and stable enough to live in the client. Saves a server-side string concatenation per zone, per `/zones` poll.
+- **No new endpoints.** `/roon/image` and `/roon/volume` already existed.
+
+### Wire-format change
+
+- `Zone` (in `src/app/api.rs`) re-gained the `volume_control: Option<ZoneVolumeControl>` field that was removed when the Zones page was deleted. New `ZoneVolumeControl` struct mirrors the bus's `VolumeControl` subset needed by the slider: `value`, `min`, `max`, `step`, `is_muted`, `scale: Option<String>`.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/app/api.rs` | Re-added `Zone.volume_control` field and the `ZoneVolumeControl` struct (mirrors bus `VolumeControl` subset: value/min/max/step/is_muted/scale) |
+| `src/app/pages/conversational_ai.rs` | Added `do_volume_set()` helper that POSTs to `/roon/volume` with `relative: false`. Banner reworked into two rows: top row gets a 40×40 album-art thumbnail (or `♪` fallback) before the label; bottom row holds the volume slider for Roon zones with a populated `volume_control`. UPnP zones still get the banner but no slider. |
+
+### Behaviour changes for users
+
+- The banner now shows album art when the track has it; placeholder otherwise.
+- A volume slider appears below the title/buttons row whenever a Roon zone is selected and has a populated VolumeControl. Drag it to set absolute volume; the readout shows the current value (with `dB` units when the zone uses the decibels scale).
+- The banner is now visually closer to what the deleted Zones page used to provide, without bringing back a whole page.
+
+### Build + smoke
+
+`cargo check --features server` and `cargo check --target wasm32-unknown-unknown --features web --no-default-features` both pass cleanly. Full release rebuild + runtime smoke pending at the time of this writing.
