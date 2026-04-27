@@ -787,6 +787,13 @@ async fn run_agent_streaming_inner(
     // Once Claude writes the suggestions sentinel, we stop forwarding text to
     // the client (the JSON inside the block isn't user-visible content).
     let mut suggestions_emitted = false;
+    // Records (byte_offset_in_full_text, summary) for each tool call as it
+    // fires. After the loop, we splice these into a parallel "marked text"
+    // buffer (with Private-Use-Area sentinel markers) which then goes through
+    // markdown→HTML conversion. Final HTML has the sentinels replaced with
+    // pill spans, so inline tool indicators persist after the streaming
+    // bubble switches to the rendered HTML.
+    let mut tool_positions: Vec<(usize, String)> = Vec::new();
 
     for _ in 0..10 {
         // Stream this iteration. Text deltas go to the client AND get appended
@@ -842,9 +849,11 @@ async fn run_agent_streaming_inner(
                 if let ContentBlock::ToolUse { id, name, input } = block {
                     tracing::debug!("AI tool call (stream): {} {:?}", name, input);
                     let result = execute_tool(name, input, &state).await;
-                    let _ = tx.send(StreamEvent::Tool {
-                        summary: format!("{}({})", name, summarise_input(input)),
-                    });
+                    let summary = format!("{}({})", name, summarise_input(input));
+                    // Record the position in the buffered text so we can splice
+                    // a sentinel into the markdown source for HTML rendering.
+                    tool_positions.push((full_text.len(), summary.clone()));
+                    let _ = tx.send(StreamEvent::Tool { summary });
                     result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: result,
@@ -867,13 +876,101 @@ async fn run_agent_streaming_inner(
 
     let (clean_text, suggestions) = extract_suggestions(&full_text);
 
+    // Build the marked source by splicing tool sentinels into clean_text at the
+    // recorded byte offsets, dropping any tools that landed inside (or after)
+    // the suggestions block.
+    let suggestions_cutoff = full_text.find("<<<SUGGESTIONS>>>").unwrap_or(full_text.len());
+    let response_html = render_with_pills(&clean_text, &tool_positions, suggestions_cutoff);
+
     let _ = tx.send(StreamEvent::Done {
-        response: markdown_to_html(&clean_text),
+        response: response_html,
         response_markdown: clean_text,
         suggestions,
     });
 
     Ok(())
+}
+
+/// Splice tool-call sentinels into the markdown source at the recorded byte
+/// offsets, render to HTML, then swap each sentinel for a pill span.
+///
+/// The two-step approach (insert sentinels into source → render → replace)
+/// keeps pill placement aligned with where the agent paused in the natural
+/// flow of its prose without requiring offset arithmetic against the
+/// post-render HTML token stream.
+fn render_with_pills(
+    clean_text: &str,
+    tool_positions: &[(usize, String)],
+    suggestions_cutoff: usize,
+) -> String {
+    if tool_positions.is_empty() {
+        return markdown_to_html(clean_text);
+    }
+
+    // Sentinel markers using Private Use Area code points so they can't clash
+    // with any user-visible text. They survive markdown rendering as plain
+    // text, which lets us swap them out later.
+    const PILL_START: char = '\u{E000}';
+    const PILL_END: char = '\u{E001}';
+
+    // Build the marked source. tool_positions is in insertion order; offsets
+    // are relative to full_text BEFORE the suggestions block was stripped.
+    // Since extract_suggestions only trims the *trailing* suggestions block,
+    // any tool position <= suggestions_cutoff still aligns with clean_text.
+    let mut marked = String::with_capacity(clean_text.len() + tool_positions.len() * 32);
+    let mut last_offset = 0usize;
+    for (offset, summary) in tool_positions {
+        if *offset > suggestions_cutoff || *offset > clean_text.len() {
+            continue;
+        }
+        // Snap to a UTF-8 char boundary defensively.
+        let mut safe_offset = *offset;
+        while safe_offset > last_offset && !clean_text.is_char_boundary(safe_offset) {
+            safe_offset -= 1;
+        }
+        marked.push_str(&clean_text[last_offset..safe_offset]);
+        marked.push(PILL_START);
+        marked.push_str("TOOL:");
+        marked.push_str(summary);
+        marked.push(PILL_END);
+        last_offset = safe_offset;
+    }
+    marked.push_str(&clean_text[last_offset..]);
+
+    let html = markdown_to_html(&marked);
+
+    // Replace each sentinel-wrapped marker with the pill span. Use a regex
+    // because the markdown renderer may have wrapped sentinels in arbitrary
+    // surrounding HTML (paragraph tags, list items, etc.) but the sentinel
+    // chars themselves pass through unchanged.
+    let re = match regex::Regex::new(r"\u{E000}TOOL:([^\u{E001}]*)\u{E001}") {
+        Ok(re) => re,
+        Err(_) => return html,
+    };
+    re.replace_all(&html, |caps: &regex::Captures| {
+        let summary = &caps[1];
+        let escaped = html_escape(summary);
+        format!(
+            "<span class=\"inline-block mx-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-mono align-baseline\" title=\"Tool call\">⚡ {}</span>",
+            escaped
+        )
+    })
+    .into_owned()
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Extract a `<<<SUGGESTIONS>>> ... <<<END_SUGGESTIONS>>>` block from Claude's

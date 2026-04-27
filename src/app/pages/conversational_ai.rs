@@ -6,8 +6,23 @@ use crate::app::voice_context::use_voice;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+// Multi-conversation storage:
+//   - INDEX_KEY    → JSON Vec<ConversationMeta> (id + title for each chat)
+//   - MSG_KEY_PREFIX + id → JSON Vec<ChatMessage> for that conversation
+// On first hydrate after upgrade, the legacy `roon-ai-conversation` key is
+// migrated into a single conversation entry with the title "Conversation".
 #[allow(dead_code)]
-const STORAGE_KEY: &str = "roon-ai-conversation";
+const INDEX_KEY: &str = "roon-ai-conversations-index";
+#[allow(dead_code)]
+const MSG_KEY_PREFIX: &str = "roon-ai-conversation-";
+#[allow(dead_code)]
+const LEGACY_STORAGE_KEY: &str = "roon-ai-conversation";
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct ConversationMeta {
+    id: String,
+    title: String,
+}
 
 /// Ordered fragment of a streaming assistant reply. Text deltas and tool
 /// calls are interleaved in the order they arrive so the UI can render
@@ -466,10 +481,11 @@ fn do_transport(zone_id: String, action: &'static str) {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_messages_from_storage() -> Vec<ChatMessage> {
+fn load_messages_from_storage(id: &str) -> Vec<ChatMessage> {
     if let Some(window) = web_sys::window() {
         if let Ok(Some(storage)) = window.local_storage() {
-            if let Ok(Some(json)) = storage.get_item(STORAGE_KEY) {
+            let key = format!("{}{}", MSG_KEY_PREFIX, id);
+            if let Ok(Some(json)) = storage.get_item(&key) {
                 if let Ok(parsed) = serde_json::from_str::<Vec<ChatMessage>>(&json) {
                     return parsed;
                 }
@@ -480,35 +496,128 @@ fn load_messages_from_storage() -> Vec<ChatMessage> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_messages_from_storage() -> Vec<ChatMessage> {
+fn load_messages_from_storage(_id: &str) -> Vec<ChatMessage> {
     Vec::new()
 }
 
 #[cfg(target_arch = "wasm32")]
-fn save_messages_to_storage(messages: &[ChatMessage]) {
+fn save_messages_to_storage(id: &str, messages: &[ChatMessage]) {
     if let Some(window) = web_sys::window() {
         if let Ok(Some(storage)) = window.local_storage() {
+            let key = format!("{}{}", MSG_KEY_PREFIX, id);
             if let Ok(json) = serde_json::to_string(messages) {
-                let _ = storage.set_item(STORAGE_KEY, &json);
+                let _ = storage.set_item(&key, &json);
             }
         }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn save_messages_to_storage(_messages: &[ChatMessage]) {}
+fn save_messages_to_storage(_id: &str, _messages: &[ChatMessage]) {}
 
 #[cfg(target_arch = "wasm32")]
-fn clear_storage() {
+fn delete_conversation_storage(id: &str) {
     if let Some(window) = web_sys::window() {
         if let Ok(Some(storage)) = window.local_storage() {
-            let _ = storage.remove_item(STORAGE_KEY);
+            let key = format!("{}{}", MSG_KEY_PREFIX, id);
+            let _ = storage.remove_item(&key);
         }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn clear_storage() {}
+fn delete_conversation_storage(_id: &str) {}
+
+#[cfg(target_arch = "wasm32")]
+fn load_index() -> Vec<ConversationMeta> {
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            if let Ok(Some(json)) = storage.get_item(INDEX_KEY) {
+                if let Ok(parsed) = serde_json::from_str::<Vec<ConversationMeta>>(&json) {
+                    return parsed;
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_index() -> Vec<ConversationMeta> {
+    Vec::new()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_index(index: &[ConversationMeta]) {
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            if let Ok(json) = serde_json::to_string(index) {
+                let _ = storage.set_item(INDEX_KEY, &json);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_index(_index: &[ConversationMeta]) {}
+
+/// Migrate the legacy single-conversation key into a new index entry. Runs
+/// once on first hydrate after the multi-conversation upgrade. Returns the
+/// migrated id if anything was migrated.
+#[cfg(target_arch = "wasm32")]
+fn migrate_legacy() -> Option<String> {
+    let window = web_sys::window()?;
+    let storage = window.local_storage().ok().flatten()?;
+    let legacy_json = storage.get_item(LEGACY_STORAGE_KEY).ok().flatten()?;
+    if legacy_json.is_empty() || legacy_json == "[]" {
+        let _ = storage.remove_item(LEGACY_STORAGE_KEY);
+        return None;
+    }
+    let id = generate_conversation_id();
+    let new_key = format!("{}{}", MSG_KEY_PREFIX, id);
+    let _ = storage.set_item(&new_key, &legacy_json);
+    let _ = storage.remove_item(LEGACY_STORAGE_KEY);
+    Some(id)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn migrate_legacy() -> Option<String> {
+    None
+}
+
+/// Generate a new conversation id. Uses the JS Date.now() so we don't need
+/// chrono on WASM. On non-wasm (SSR) the id never matters because we never
+/// hit storage there.
+#[cfg(target_arch = "wasm32")]
+fn generate_conversation_id() -> String {
+    let now_ms = js_sys::Date::now() as u64;
+    format!("c{}", now_ms)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn generate_conversation_id() -> String {
+    "c0".to_string()
+}
+
+/// Derive a 2-4 word title from the first user message. Trim whitespace,
+/// take up to ~40 chars, append … if truncated.
+fn derive_title(first_user_message: &str) -> String {
+    let trimmed = first_user_message.trim();
+    if trimmed.is_empty() {
+        return "New chat".to_string();
+    }
+    let mut out = String::new();
+    let mut count = 0usize;
+    for ch in trimmed.chars() {
+        if count >= 40 {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+        count += 1;
+    }
+    out
+}
 
 #[component]
 pub fn ConversationalAi() -> Element {
@@ -517,6 +626,14 @@ pub fn ConversationalAi() -> Element {
     let mut selected_zone = use_signal(|| String::new());
     let loading = use_signal(|| false);
     let default_zone_ctx = use_default_zone();
+
+    // Multi-conversation state.
+    let mut conversations = use_signal(|| Vec::<ConversationMeta>::new());
+    let mut current_id = use_signal(|| String::new());
+    // Tracks whether we've finished hydrating from storage; suppresses the
+    // initial save-on-mount that would otherwise overwrite stored data with
+    // an empty list before the load has a chance to populate it.
+    let mut hydrated = use_signal(|| false);
 
     // Speech state
     let mut speak_enabled = use_signal(|| false);
@@ -537,18 +654,81 @@ pub fn ConversationalAi() -> Element {
         });
     });
 
-    // Hydrate from localStorage on mount (no-op on server)
+    // Hydrate the conversation index + initial messages on mount. Migrates the
+    // legacy single-key conversation if found. Effect runs exactly once because
+    // it doesn't read any tracked signals.
     use_effect(move || {
-        let saved = load_messages_from_storage();
-        if !saved.is_empty() && messages.read().is_empty() {
-            messages.set(saved);
+        let mut idx = load_index();
+        if idx.is_empty() {
+            // First-run-after-upgrade: try migrating the legacy single key.
+            if let Some(legacy_id) = migrate_legacy() {
+                idx.push(ConversationMeta {
+                    id: legacy_id,
+                    title: "Conversation".to_string(),
+                });
+                save_index(&idx);
+            } else {
+                // Fresh install — create a starter entry so the dropdown is never empty.
+                let id = generate_conversation_id();
+                idx.push(ConversationMeta {
+                    id,
+                    title: "New chat".to_string(),
+                });
+                save_index(&idx);
+            }
         }
+        let initial_id = idx[0].id.clone();
+        let initial_msgs = load_messages_from_storage(&initial_id);
+        conversations.set(idx);
+        current_id.set(initial_id);
+        if !initial_msgs.is_empty() {
+            messages.set(initial_msgs);
+        }
+        hydrated.set(true);
     });
 
-    // Persist on every messages change
+    // Persist messages under the current conversation id whenever they change.
+    // Suppressed until hydration finishes so we don't blow away stored data
+    // with the empty initial signal.
     use_effect(move || {
+        if !*hydrated.read() {
+            return;
+        }
+        let id = current_id.read().clone();
+        if id.is_empty() {
+            return;
+        }
         let snapshot = messages.read().clone();
-        save_messages_to_storage(&snapshot);
+        save_messages_to_storage(&id, &snapshot);
+    });
+
+    // Auto-title: when a conversation that's still titled "New chat" gets its
+    // first user turn, derive a title from that message and persist it.
+    use_effect(move || {
+        if !*hydrated.read() {
+            return;
+        }
+        let id = current_id.read().clone();
+        if id.is_empty() {
+            return;
+        }
+        let snapshot = messages.read();
+        let first_user = snapshot.iter().find(|m| matches!(m.role, Role::User));
+        let Some(first) = first_user else { return };
+        let new_title = derive_title(&first.text);
+        let mut idx = conversations.read().clone();
+        let mut changed = false;
+        for entry in idx.iter_mut() {
+            if entry.id == id && entry.title == "New chat" {
+                entry.title = new_title.clone();
+                changed = true;
+                break;
+            }
+        }
+        if changed {
+            save_index(&idx);
+            conversations.set(idx);
+        }
     });
 
     let mut zones = use_resource(|| async {
@@ -742,14 +922,97 @@ pub fn ConversationalAi() -> Element {
                             }
                         }
                     }
-                    button {
-                        class: "btn btn-outline btn-sm disabled:opacity-40",
-                        disabled: messages.read().is_empty(),
-                        onclick: move |_| {
-                            messages.write().clear();
-                            clear_storage();
-                        },
-                        "Clear"
+                    // Conversation selector: dropdown of past chats + New + Delete.
+                    {
+                        let convs = conversations.read().clone();
+                        let cur = current_id.read().clone();
+                        let single = convs.len() <= 1;
+                        rsx! {
+                            div { class: "flex items-center gap-1",
+                                if !convs.is_empty() {
+                                    select {
+                                        class: "input text-sm py-1 max-w-[14rem]",
+                                        title: "Switch conversation",
+                                        value: "{cur}",
+                                        oninput: move |e| {
+                                            let new_id = e.value();
+                                            if new_id == *current_id.read() {
+                                                return;
+                                            }
+                                            let loaded = load_messages_from_storage(&new_id);
+                                            current_id.set(new_id);
+                                            messages.set(loaded);
+                                        },
+                                        for c in convs.iter() {
+                                            option {
+                                                value: "{c.id}",
+                                                selected: c.id == cur,
+                                                "{c.title}"
+                                            }
+                                        }
+                                    }
+                                }
+                                button {
+                                    class: "btn btn-outline btn-sm",
+                                    title: "New conversation",
+                                    onclick: move |_| {
+                                        let id = generate_conversation_id();
+                                        let mut idx = conversations.read().clone();
+                                        idx.insert(0, ConversationMeta {
+                                            id: id.clone(),
+                                            title: "New chat".to_string(),
+                                        });
+                                        save_index(&idx);
+                                        conversations.set(idx);
+                                        current_id.set(id);
+                                        messages.set(Vec::new());
+                                    },
+                                    "+ New"
+                                }
+                                button {
+                                    class: "btn btn-outline btn-sm disabled:opacity-40",
+                                    title: if single {
+                                        "Clears the current conversation"
+                                    } else {
+                                        "Delete this conversation"
+                                    },
+                                    disabled: messages.read().is_empty() && single,
+                                    onclick: move |_| {
+                                        let id = current_id.read().clone();
+                                        if id.is_empty() {
+                                            return;
+                                        }
+                                        let mut idx = conversations.read().clone();
+                                        if idx.len() <= 1 {
+                                            // Only one conversation — wipe its messages but
+                                            // keep the entry (rename back to "New chat" so
+                                            // auto-title can fire again).
+                                            for entry in idx.iter_mut() {
+                                                if entry.id == id {
+                                                    entry.title = "New chat".to_string();
+                                                    break;
+                                                }
+                                            }
+                                            save_index(&idx);
+                                            conversations.set(idx);
+                                            messages.set(Vec::new());
+                                            delete_conversation_storage(&id);
+                                            return;
+                                        }
+                                        // Multiple conversations — drop this one, switch to next.
+                                        idx.retain(|c| c.id != id);
+                                        delete_conversation_storage(&id);
+                                        let next_id = idx[0].id.clone();
+                                        let next_msgs = load_messages_from_storage(&next_id);
+                                        save_index(&idx);
+                                        conversations.set(idx);
+                                        current_id.set(next_id);
+                                        messages.set(next_msgs);
+                                    },
+                                    if single { "Clear" } else { "Delete" }
+                                }
+                            }
+                        }
                     }
                 }
             }

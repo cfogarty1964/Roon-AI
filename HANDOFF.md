@@ -1993,4 +1993,222 @@ Then `Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue` and re-
 
 The earlier candidate item #13 ("Rename `/conversational` → `/ai`, the shorter URL is more natural") is effectively superseded — `/` is now even shorter, and there's no reason to also have `/ai` as a separate route. Item #13 can be considered done in spirit.
 
-Or sit with what's there. The conversational AI surface is in a notably good state — streaming + voice + history + suggestions + now-playing context all working together — and is fundamentally different from where it was at the start of the day.
+---
+
+## Where We Stand — Status After Zones Removal (2026-04-27 evening)
+
+### Current state
+
+- **Branch `v3`** at `f58588e` on `cfogarty/v3`. Working tree clean (only the two intentionally-untracked files: `.claude/scheduled_tasks.lock`, `.claude/settings.json`).
+- **Two commits today**: `2fcf182` (rename + transport buttons + inline tool indicators + test rot cleanup) and `f58588e` (Zones page removal).
+- **Web UI is now three routes**: `/` Conversational AI · `/library` · `/settings`. The Zones page is gone; the Conversational AI surface is the home.
+- **Conversational AI page** carries: streaming replies with inline `⚡ tool_name` pills, now-playing banner with ⏮/⏯/⏭ transport, voice in/out, hands-free mode, voice picker on Settings, persistent history, ▶ Play suggestion rows, default-zone star.
+- **Backend**: Roon adapter + UPnP (UPnP off by default), unified ZoneAggregator, MCP server (6 tools), AI agent calling Anthropic Sonnet 4.6 over a streaming SSE bridge.
+- **Test suite green**, full release build verified at runtime, Roon Nucleus discovered and 9 zones live.
+
+### Candidate list — what's done vs what's left
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Stream the AI response | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 2 | Now-playing context on Conversational page | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 3 | Multiple saved conversations / sidebar | Not started |
+| 4 | Server-side cloud TTS | Not started — low priority (Edge "Online (Natural)" voices are good enough) |
+| 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
+| 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
+| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 8 | Per-token TTS streaming | Not started |
+| 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
+| 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
+| 11 | Commit + push today's work | ✅ Done (`2fcf182` + `f58588e`, 2026-04-27) |
+| 12 | Persistent inline tool indicators after streaming | Not started |
+| 13 | Shorten `/conversational` URL | ✅ Done in spirit (`f58588e` makes `/` the home) |
+| 14 | CI workflow rename (`.github/workflows/*`) | Not started |
+| 15 | Run `cargo test` in CI | Not started |
+
+### Next-session candidates, ranked by perceived impact
+
+**Strongest ergonomic wins**
+
+**#8 — Per-token TTS streaming** (~2–3 h). The spoken reply currently waits for the whole response before starting. Splitting the streaming text on sentence boundaries (`.` / `?` / `!`) and feeding each into a queued `SpeechSynthesisUtterance` would make hands-free mode feel like a real conversation instead of a turn-based protocol. Big payoff *if* voice is actually used. Browser TTS queueing is finicky between sentences — needs glue.
+
+**Banner album art + volume slider** (~1 h total). The Zones removal silently dropped two visuals: the album thumbnail and a per-zone volume control. The conversational banner currently shows only text. Adding a small thumbnail (`/roon/image?image_key={k}`) and a volume slider that posts to `/roon/volume` brings back the missed visual richness without bringing back a whole page. Surfaced today after the Zones removal landed.
+
+**Quality-of-life features**
+
+**#3 — Multiple saved conversations / sidebar** (~half day). Keep "late-night jazz" thread distinct from "workout pump-up". ChatGPT-style sidebar with auto-titled chats, per-conversation localStorage. Probably overkill unless you actually want multiple threads.
+
+**#12 — Persistent inline tool indicators** (~half day). The `⚡ tool_name` pills currently disappear when the streaming bubble switches to rendered HTML. Half-day to make them stick (either client-side markdown render or server-side embedding pill HTML at offsets). Marginal — the right-column tool log still preserves the record.
+
+**Housekeeping** (lower urgency, but unblocks future release work)
+
+**#15 — Run `cargo test` in CI** (~30 min). Today proved test rot accumulates silently when nothing runs the suite (api_contract fixture + dead lints + ignored_send_lint Windows path bug — all hiding for months). A `cargo test --features server` step gated behind the `build-me` label catches the next round before it lands.
+
+**#14 — CI workflow rename** (~2 h). The release pipeline (`.github/workflows/build.yml`, `docker.yml`) still references `unified-hifi-control` everywhere — binary names, Docker tags, SPK/QPKG package names. Worth doing before the next tagged release; not before.
+
+### Recommendation
+
+The fork on the table:
+
+- **Voice is your primary mode** → #8 + banner album art (~half day combined). Daily-use surface gets meaningfully better.
+- **Voice is a nice-to-have, you want to ship** → #15 + #14 (~half day combined). Project becomes release-ready under its new name.
+- **Neither — settle in** → use it for a few days. The rename + home-page consolidation are big enough that real use will surface what to do next better than guessing.
+
+---
+
+## Recent Work (2026-04-27, third pass) — QoL + Housekeeping Sweep
+
+A focused session that knocked out the two quality-of-life features (#12 + #3) and the two housekeeping items (#5 + #6) in one go.
+
+### #5 — Cargo test in CI
+
+Discovered the `test` job at `build.yml:372` already exists and runs `cargo test --workspace` on every push to `v3`. So #15 was effectively already in place; the rot accumulated because no one was reading the CI output, not because it wasn't running.
+
+Improvement: made the test command explicit about features (`cargo test --workspace --features server`) so a future change to `default-features` doesn't silently disable integration test coverage. Added a comment listing which integration tests need the server feature. Same enhancement applied to `docker.yml`'s test step.
+
+The existing **Build status badge** at `README.md:3` already covers test status — failures show as a red badge.
+
+### #6 — CI workflow rename (`.github/workflows/build.yml`)
+
+Renamed only the **internal binary paths** that would have broken routine pushes after the Cargo `name` rename:
+
+- `target/dx/unified-hifi-control/` → `target/dx/roon-ai/` (12 occurrences)
+- `target/{arch}-*/release/unified-hifi-control[.exe]` → `target/{arch}-*/release/roon-ai[.exe]`
+- `cargo clean -p unified-hifi-control` → `cargo clean -p roon-ai`
+- `assets/unified-hifi-control` → `assets/roon-ai` (smoke-test HTML check)
+- macOS `lipo` arguments — the per-arch artifact's binary file name follows the `cargo` bin name now (`x64/roon-ai`, `arm64/roon-ai`)
+- `docker.yml` test step — same `--features server` enhancement
+
+**Intentionally not renamed (out of scope this session):**
+
+- The LMS plugin job (`build-lms-universal`, `update-lms-repo`) — references a deleted `lms-plugin/` directory, so it's dead code. Removing it cleanly requires also touching the `release` job's `needs:` array and the `summary` job. Roughly 50 lines to rip out — separate cleanup task.
+- Linux deb/rpm install paths (`/usr/bin/unified-hifi-control`, `unified-hifi-control.service`) — also requires renaming `build/linux/unified-hifi-control.service` and `build/arch/unified-hifi-control.service`/`.install`.
+- Synology SPK / QNAP QPKG package filenames + internal binary names — release-only, gated behind workflow_dispatch inputs.
+- Build artifact filenames (`dist/bin/unified-hifi-linux-x64`, `lms-unified-hifi-control-*.zip`) — purely cosmetic.
+- `muness/unified-hifi-control` Docker image owner and `open-horizon-labs/unified-hifi-control` repo URL — external resources, not ours to rename.
+
+**Why this scoping is fine:** all the gated/release-only jobs (`build-linux-packages`, `build-synology`, `build-qnap-*`, `build-lms-universal`) only run on workflow_dispatch with explicit inputs, or on release-tag pushes. Routine pushes to `v3` don't fire them. The renames done in this session unblock routine pushes from failing on the Cargo name change. Full release-pipeline rename is a future task tied to the next tagged release.
+
+### #12 — Persistent inline tool-call indicators
+
+Added so the `⚡ tool_name` pills don't disappear when the streaming bubble switches to rendered HTML.
+
+**Approach:** server-side sentinel insertion + post-render replacement (`src/ai/mod.rs`). Two-pass:
+
+1. **During streaming** (`run_agent_streaming_inner`): track each tool call's byte offset in `full_text` and its summary as `tool_positions: Vec<(usize, String)>`. The streaming Text events to the client are unchanged; the inline pill rendering during the stream still goes through the existing `stream_parts` path on the client.
+2. **At end** (`render_with_pills`): splice Private-Use-Area sentinel markers (`\u{E000}TOOL:{summary}\u{E001}`) into the cleaned markdown source at each recorded offset, render markdown→HTML via `pulldown_cmark` (sentinels pass through as text), then replace each sentinel with `<span class="...">⚡ {summary}</span>` HTML using a regex.
+
+**Why Private Use Area:** unicode codepoints `U+E000`–`U+E001` are guaranteed never to appear in normal text or in markdown's standard syntax, so they survive rendering as plain characters and are unambiguously detectable in the final HTML.
+
+Other paths considered and rejected:
+- Client-side markdown rendering — would have added a WASM markdown crate (`pulldown-cmark` doesn't compile to WASM cleanly; alternatives add bundle weight) and broken the project's "all rendering server-side" design.
+- HTML offset arithmetic against the post-render token stream — fragile; markdown rendering can wrap a sentinel position inside paragraph tags, list items, etc. Sentinel approach is robust to that because the chars themselves don't get touched.
+
+The pill class list matches the existing inline streaming pill exactly so the visual is consistent before/after the streaming→done transition.
+
+The non-streaming `run_agent` path (legacy `POST /api/ai/chat`) is left unchanged — pills only apply to the streaming endpoint that the page actually uses.
+
+### #3 — Multiple saved conversations (minimum-viable)
+
+Shipped the dropdown selector + new + delete + auto-title flow in `src/app/pages/conversational_ai.rs`. Deferred the ChatGPT-style sidebar with separate Claude auto-titling — the dropdown is enough for the single-user case.
+
+**Storage layout:**
+- `roon-ai-conversations-index` → JSON `Vec<{id, title}>` — the list of all conversations
+- `roon-ai-conversation-{id}` → JSON `Vec<ChatMessage>` — messages per conversation
+- Migrates the legacy single-key `roon-ai-conversation` on first hydrate after upgrade (preserves your existing chat as one entry titled "Conversation")
+
+**ID generation:** `format!("c{}", js_sys::Date::now())` — millisecond-resolution timestamps, no chrono needed in WASM.
+
+**Auto-title:** when a conversation still titled "New chat" gets its first user message, replaces the title with the first ~40 chars of that message (truncated with `…`). Effect-driven; runs whenever messages change. No separate Claude API call; ~5 lines of pure-Rust logic.
+
+**UI changes** (header):
+- Conversation `<select>` dropdown (max 14rem wide, truncates long titles) — only shown if there are entries
+- "+ New" button — generates a new id, prepends to index, switches to it, clears messages
+- Old "Clear" button → context-aware: shows "Clear" when there's only one conversation (wipes its messages and resets title to "New chat"), shows "Delete" when there are multiple (drops the conversation entirely and switches to the most recent of the remaining)
+
+**Effects added:**
+- `hydrated: Signal<bool>` flag suppresses the save-on-mount that would otherwise overwrite stored data with the empty initial signal before the load completes
+- Migration runs once on initial hydrate (creates a starter "New chat" entry on fresh installs so the dropdown is never empty)
+- Save effect is now id-keyed: `save_messages_to_storage(&id, &snapshot)`
+- Auto-title effect watches messages, derives title from the first user turn, persists if title was still "New chat"
+
+**Handoff candidate item #3 was scoped down** — the original spec called for a sidebar, auto-titling via a separate Claude call, and per-conversation `last_used` tracking. The shipped MVP omits all of those; the dropdown + auto-title-from-message-text covers the core need and stays under 200 lines of net change.
+
+### Build + tests
+
+- `cargo check --features server` — passes
+- `cargo check --target wasm32-unknown-unknown --features web --no-default-features` — passes
+- `cargo test --features server` — all green (39 tests across multiple integration bins)
+
+Full release rebuild (Tailwind + dx + cargo release) and runtime smoke test pending at the time of this writing.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `.github/workflows/build.yml` | `target/dx/unified-hifi-control/` → `target/dx/roon-ai/`; release binary paths likewise; `cargo clean -p` rename; macOS lipo arg rename; smoke-test HTML asset path rename; explicit `--features server` on cargo test |
+| `.github/workflows/docker.yml` | Same `--features server` enhancement on the test step |
+| `src/ai/mod.rs` | Added `tool_positions: Vec<(usize, String)>` tracking through `run_agent_streaming_inner`; added `render_with_pills()` and `html_escape()` helpers; sentinel-based pill injection |
+| `src/app/pages/conversational_ai.rs` | Multi-conversation storage helpers (load/save index, load/save messages by id, migrate legacy, generate id, derive title); new `conversations`, `current_id`, `hydrated` signals; replaced single-key load/save effects with id-aware versions; added auto-title effect; replaced Clear button with conversation `<select>` + "+ New" + context-aware "Clear/Delete" buttons |
+
+---
+
+## Where We Stand — Status After QoL + Housekeeping (2026-04-27 late night)
+
+### Current state
+
+- **Branch `v3`** at HEAD — uncommitted working tree with this third pass; not yet built or pushed.
+- Three commits earlier today (`2fcf182` rename + `f58588e` Zones removal) already on `cfogarty/v3`. This pass adds another tranche of work that will become a fourth commit.
+- **Web UI**: `/` Conversational AI · `/library` · `/settings` (unchanged from prior pass).
+- **Conversational AI page** now carries:
+  - Streaming replies with **persistent** inline `⚡ tool_name` pills (#12 — pills survive into the rendered HTML)
+  - Multi-conversation dropdown with "+ New" and context-aware "Clear / Delete" (#3 — auto-titled from first user message)
+  - Now-playing banner with ⏮ / ⏯ / ⏭ transport
+  - Voice in/out, hands-free mode
+  - Voice picker on Settings, persistent history per conversation, ▶ Play suggestion rows, default-zone star
+- **CI**: explicit `cargo test --features server` on every push; build.yml internal binary paths point at the renamed `target/dx/roon-ai/` and `target/release/roon-ai[.exe]`.
+- **Test suite green** (39 tests across all integration bins).
+
+### Candidate list — what's done vs what's left
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Stream the AI response | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 2 | Now-playing context on Conversational page | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 3 | Multiple saved conversations / sidebar | ✅ Done (MVP — dropdown + auto-title, 2026-04-27 third pass) |
+| 4 | Server-side cloud TTS | Not started — low priority |
+| 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
+| 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
+| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 8 | Per-token TTS streaming | Not started |
+| 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
+| 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
+| 11 | Commit + push today's work | ✅ Done (`2fcf182` + `f58588e`, 2026-04-27); third-pass commit pending |
+| 12 | Persistent inline tool indicators after streaming | ✅ Done (2026-04-27 third pass) |
+| 13 | Shorten `/conversational` URL | ✅ Done (`f58588e` makes `/` the home) |
+| 14 | CI workflow rename | ✅ Done for routine pushes (2026-04-27 third pass); LMS removal + release-pipeline artifact rename deferred |
+| 15 | Run `cargo test` in CI | ✅ Done (already in place; made explicit, 2026-04-27 third pass) |
+
+### What's still on the table
+
+**#4 — Server-side cloud TTS.** Lowest priority; only matters for cross-browser voice consistency. Edge "Online (Natural)" voices are good enough that this hasn't surfaced as a problem.
+
+**#8 — Per-token TTS streaming.** With #12 making the visual flow even more "live", the corresponding voice enhancement is to start *speaking* mid-stream. Sentence-boundary splitting + queued `SpeechSynthesisUtterance`. ~2–3 hours; worth doing if hands-free becomes a daily mode.
+
+**Banner album art + volume slider.** Surfaced after the Zones page removal — the banner currently shows only text. Adding a thumbnail + slider would restore the visual richness without bringing back a whole page. ~1 hour.
+
+**LMS plugin removal from CI.** The `build-lms-universal` and `update-lms-repo` jobs in `build.yml` reference the deleted `lms-plugin/` directory. Currently gated behind `build_lms = 'true'` workflow_dispatch input so they don't fire on routine pushes, but they're dead code. ~30 min to rip out cleanly (also requires updating the `release` job's `needs:` array and the `summary` job).
+
+**Release-pipeline artifact rename.** Build artifact filenames (`unified-hifi-linux-x64`, etc.), Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/unified-hifi-control` + the `.service` file), Arch AUR package name (`unified-hifi-control-bin`). All gated behind workflow_dispatch inputs / release tags, so don't fire on routine pushes. Worth doing before the next tagged release. ~1–2 hours of careful YAML editing plus renaming the actual `.service` files.
+
+### New ideas surfaced this pass
+
+16. **Migrate to a real Conversation model.** The current MVP stores `(id, title)` per conversation. As we add features (auto-rename, last_used sorting, archive/unarchive, pinned chats, search), the inline JSON gets unwieldy. Worth refactoring into a typed `Conversation { id, title, created_at, last_used, message_count }` struct in a dedicated module if any of those features land.
+
+17. **Sentinel-injection pattern is reusable.** The `\u{E000}TOOL:...\u{E001}` approach used in #12 for embedding pills in markdown→HTML output is general-purpose. If we ever want to embed other in-flow widgets (per-message timestamps, per-paragraph copy buttons, citation links), the same pattern works.
+
+18. **Auto-title via Claude.** The current MVP titles conversations from the first user message (`Play late-night jazz pi…`). A separate Claude call could produce a 2-4 word title (`Late Night Jazz`) — cleaner but adds an API call per conversation. ~30 min if wanted; right now the first-message titles are fine.
+
+### Recommendation
+
+The conversational surface has roughly hit feature-completeness for the single-user case. Real next-session candidates are now small polish items (banner album art, per-token TTS) or release-pipeline cleanup (LMS removal, artifact rename). Use it for a few days; fixes will surface naturally.

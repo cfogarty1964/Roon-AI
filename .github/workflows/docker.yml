@@ -59,7 +59,7 @@ jobs:
           cache-on-failure: true
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --features server
 
   docker-edge:
     name: Build Docker Edge
