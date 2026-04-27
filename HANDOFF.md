@@ -2250,4 +2250,98 @@ The visuals that the Zones page used to provide (album art + per-zone volume con
 
 ### Build + smoke
 
-`cargo check --features server` and `cargo check --target wasm32-unknown-unknown --features web --no-default-features` both pass cleanly. Full release rebuild + runtime smoke pending at the time of this writing.
+- `cargo check` clean for both `--features server` and `--target wasm32-unknown-unknown --features web --no-default-features`
+- Tailwind CSS — 149 ms
+- `dx build --release --platform web --features web` — completed, output at `target/dx/roon-ai/release/web/public/`
+- `cargo build --release --features server` — completed, ~14 MB binary at `target/release/roon-ai.exe`
+- Live binary verified: 16 embedded WASM files (was 14), 9 zones discovered, AI chat enabled
+- `GET /zones` smoke test — sample zone returned `volume_control: {value: 60, min: 0, max: 100, step: 1, scale: "percentage"}` and `image_key` populated for tracks with art
+
+Pushed as `4c2c3f2` to `cfogarty/v3`.
+
+---
+
+## Where We Stand — Status After Banner Polish (2026-04-27 night)
+
+### Current state
+
+- **Branch `v3`** at `4c2c3f2` on `cfogarty/v3`. Working tree clean (only the two intentionally-untracked local files).
+- **Four commits today**:
+  - `2fcf182` — Big rename + transport buttons + inline tool indicators + test rot cleanup
+  - `f58588e` — Zones page removal (`/` is now Conversational AI)
+  - `83366d7` — Persistent inline tool pills + multi-conversation dropdown + CI rename + explicit `--features server`
+  - `4c2c3f2` — Album art + volume slider in now-playing banner
+- **Web UI**: `/` Conversational AI · `/library` · `/settings`.
+- **Conversational AI page** carries the complete music-control surface:
+  - Streaming replies with persistent inline `⚡ tool_name` pills
+  - Multi-conversation dropdown with "+ New" and context-aware "Clear / Delete" — auto-titled from first user message
+  - Now-playing banner with **album thumbnail**, transport buttons, and **volume slider** (Roon zones)
+  - Voice in/out, hands-free mode, voice picker on Settings
+  - Persistent history per conversation, ▶ Play suggestion rows, default-zone star
+- **Test suite green** (39 tests across multiple integration bins).
+
+### Candidate list — what's done vs what's left
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Stream the AI response | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 2 | Now-playing context on Conversational page | ✅ Done (`88f2f5f`, 2026-04-26) |
+| 3 | Multiple saved conversations / sidebar | ✅ Done MVP (`83366d7`, 2026-04-27) |
+| 4 | Server-side cloud TTS | Not started — low priority |
+| 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
+| 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
+| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 8 | Per-token TTS streaming | Not started |
+| 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
+| 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
+| 11 | Commit + push | ✅ Done (4 commits today) |
+| 12 | Persistent inline tool indicators after streaming | ✅ Done (`83366d7`, 2026-04-27) |
+| 13 | Shorten `/conversational` URL | ✅ Done (`f58588e` makes `/` the home) |
+| 14 | CI workflow rename | ✅ Done for routine pushes (`83366d7`); LMS removal + release packaging deferred |
+| 15 | Run `cargo test` in CI | ✅ Done — already in place, made explicit (`83366d7`) |
+| — | Banner album art | ✅ Done (`4c2c3f2`, 2026-04-27) |
+| — | Banner volume slider | ✅ Done (`4c2c3f2`, 2026-04-27) |
+
+### What's still on the table
+
+**Voice-mode polish**
+
+**#8 — Per-token TTS streaming** (~2–3 h). Speak each sentence as it streams. Big payoff if voice mode is your primary input. Browser TTS queueing between sentences is the tricky bit.
+
+**Release-pipeline cleanup** (only matters before a tagged release)
+
+**LMS plugin removal from CI** (~30 min). `build-lms-universal` and `update-lms-repo` jobs in `build.yml` reference the deleted `lms-plugin/` directory — dead code, gated behind workflow_dispatch input so harmless on routine pushes. Cleanup also touches the `release` job's `needs:` array and the `summary` job.
+
+**Release artifact-name rename** (~1–2 h). Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/unified-hifi-control` + `.service` file), Arch AUR package name, build artifact filenames. All gated, don't fire routinely. Worth doing before the next tagged release; requires also renaming the actual `.service` files in `build/linux/` and `build/arch/`.
+
+**Lower-priority follow-ups**
+
+**#4 — Server-side cloud TTS** (~half day, ~$). Cross-browser voice consistency. Edge "Online (Natural)" voices are good enough that this hasn't surfaced as a problem.
+
+**Auto-title via Claude** (~30 min). Replace the first-message-truncation conversation title with a 2–4 word title from a separate Claude call. Cleaner but adds an API call per conversation. The current MVP titles (e.g., `Play late-night jazz pi…`) are functional.
+
+**Sidebar UI for conversations**. The MVP shipped a dropdown. A ChatGPT-style sidebar would be more discoverable but uses screen real estate. Only worth it if many conversations accumulate.
+
+**Migrate to a real `Conversation` struct**. The current MVP stores `(id, title)` per conversation. As features land (last_used sorting, archive, pinned chats, search), a typed `Conversation { id, title, created_at, last_used, message_count }` in a dedicated module becomes worth the refactor.
+
+**Sentinel-injection pattern is reusable**. The `\u{E000}TOOL:...\u{E001}` approach (introduced in #12) generalises to any in-flow widget — per-message timestamps, citation links, copy buttons. If those land, this is the hook.
+
+**Long-deferred ideas in the handoff** (still valid)
+
+- Wake word ("Hey Roon") with VAD
+- Per-message 🔊 replay button (~15 min — trivial, currently unnecessary)
+- Conversation summarization (only when token cost matters)
+- Auto-fetch album tracks for context
+
+### Recommendation
+
+**The conversational AI surface is feature-complete for single-user use.** Today shipped the rename, page consolidation, multi-conversation, persistent tool pills, and banner polish — most of the candidate list.
+
+Real next moves:
+
+- **Use it for a few days.** After four commits today, the page is genuinely different from where it started. Real usage will surface the next priority better than guessing.
+- **#8 (per-token TTS)** if voice mode is becoming your primary input.
+- **LMS removal + release rename** if a tagged release is on the horizon.
+- **Auto-title via Claude** if the first-message titles start feeling rough.
+
+Or — and this is the most honest answer — settle in. The leaderboard is mostly green, the project ships a coherent feature set under a coherent name, and the next priority is best discovered by living with it.
