@@ -4,19 +4,18 @@
 [![GitHub Release](https://img.shields.io/github/v/release/open-horizon-labs/unified-hifi-control)](https://github.com/open-horizon-labs/unified-hifi-control/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/open-horizon-labs/unified-hifi-control/total)](https://github.com/open-horizon-labs/unified-hifi-control/releases)
 
-A Roon and UPnP/DLNA hi-fi control bridge with a web UI, AI natural language chat, library browser, and Claude MCP integration.
+A Roon and UPnP/DLNA hi-fi control bridge with a web UI, conversational AI agent (typed or spoken), library browser, and Claude MCP integration.
 
-Control your music with your voice, a chat message, a hardware knob, or a browser — all from one place.
+Control your music with your voice, a chat message, or a browser — all from one place.
 
 ---
 
 ## Features
 
 - **Zones page** — all Roon and UPnP zones at a glance, with transport and volume controls
-- **AI Music Control** — type natural language requests ("play late-night jazz piano on the living room zone") and the built-in Claude AI agent searches and plays
+- **Conversational AI** — type or speak natural-language requests ("play late-night jazz piano on the living room"), hear responses spoken back, see what's playing on the selected zone in context. Streaming replies, hands-free mode, persistent multi-turn history, ▶ Play suggestion buttons.
 - **Library browser** — browse your Roon library by genre, artist, composer, album; alphabet filter and grid layout for large collections; one-tap playback
 - **Persistent default zone** — set a default zone (★) from any zone picker; it pre-selects on every page until changed
-- **ESP32 Knob** — hardware volume/transport knob with OTA firmware management
 - **MCP server** — Claude AI tools for external agents and Claude Code
 
 ---
@@ -63,7 +62,7 @@ Pre-built binaries for Linux (x64, arm64, armv7), macOS (universal), and Windows
 ```powershell
 $env:ANTHROPIC_API_KEY="sk-ant-..."   # optional — enables AI chat
 $env:RUST_LOG="debug"
-.\unified-hifi-control.exe
+.\roon-ai.exe
 # Open http://localhost:8088
 ```
 
@@ -83,11 +82,11 @@ Download the QPKG from [Releases](https://github.com/open-horizon-labs/unified-h
 
 ## Configuration
 
-Config directory (Windows default): `%APPDATA%\unified-hifi-control\unified-hifi\`
+Config directory (Windows default): `%APPDATA%\unified-hifi-control\` (preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs).
 
 Override with `UHC_CONFIG_DIR` env var.
 
-**`unified-hifi-control.toml`:**
+**`config.toml`** (loaded via the `config` crate's `with_name`):
 ```toml
 port = 8088
 
@@ -96,7 +95,7 @@ port = 8088
 # display_name = "optional"
 
 [ai]
-api_key = "sk-ant-..."   # Anthropic API key — enables the /ai chat page
+api_key = "sk-ant-..."   # Anthropic API key — enables the /conversational chat page
 ```
 
 **Key environment variables:**
@@ -106,14 +105,13 @@ api_key = "sk-ant-..."   # Anthropic API key — enables the /ai chat page
 | `UHC_PORT` | HTTP port | `8088` |
 | `UHC_CONFIG_DIR` | Config/state directory | platform default |
 | `ANTHROPIC_API_KEY` | Enables AI chat (overrides TOML) | — |
-| `RUST_LOG` | Log filter | `unified_hifi_control=debug` |
-| `FIRMWARE_AUTO_UPDATE` | Knob firmware auto-download | `true` |
+| `RUST_LOG` | Log filter | `roon_ai=debug` |
 
 ---
 
-## AI Music Control
+## Conversational AI
 
-The `/ai` page lets you control your music with natural language. It uses the Claude API (claude-sonnet-4-6) with a multi-turn tool-use loop.
+The `/conversational` page lets you control your music with natural language — typed or spoken. It uses the Claude API (claude-sonnet-4-6) with a multi-turn tool-use loop, streaming replies via SSE, and the browser's built-in speech APIs for voice input and TTS.
 
 **Requirements:** an Anthropic API key ([console.anthropic.com](https://console.anthropic.com/settings/keys)). Set it in the config file or via `ANTHROPIC_API_KEY`. On startup the server logs either:
 - `AI chat enabled (Anthropic API key found)`
@@ -123,9 +121,12 @@ The `/ai` page lets you control your music with natural language. It uses the Cl
 - "Play the Adagietto from Mahler's 5th"
 - "I love that piece — start Roon Radio from it"
 - "Queue some late-night jazz piano on the Living Room zone"
+- "What is this?" / "Skip this" / "More like this" — uses the now-playing track on the selected zone as implicit context
 - "Pause" / "Turn the volume up"
 
-The right panel shows every tool call the agent makes as it works.
+A "Now playing" banner above the chat shows the current track on the selected zone. The right panel shows every tool call the agent makes as it works. Conversation history persists across reloads via `localStorage`.
+
+**Voice in/out:** click 🎤 to dictate a message. Toggle 🔊 Speak to have replies spoken aloud (voice picker on the Settings page; Edge on Windows ships free Microsoft "Online (Natural)" neural voices that sound studio-quality). Toggle 🎙 Hands-free for back-and-forth conversation without touching the keyboard. STT requires Chrome/Edge/Safari (not Firefox); TTS works in all browsers.
 
 ---
 
@@ -134,10 +135,9 @@ The right panel shows every tool call the agent makes as it works.
 | Route | Page | Purpose |
 |-------|------|---------|
 | `/` | Zones | All zones, now-playing, transport + volume |
-| `/ai` | AI Music Control | Natural language chat |
+| `/conversational` | Conversational AI | Natural-language chat with voice in/out, streaming, persistent history |
 | `/library` | Library | Browse Roon library with alphabet filter |
-| `/knobs` | Knobs | ESP32 roon-knob firmware management |
-| `/settings` | Settings | Adapter enable/disable, page visibility |
+| `/settings` | Settings | Adapter enable/disable, voice picker, appearance |
 
 ### Default Zone
 
@@ -183,7 +183,7 @@ The bridge exposes an MCP endpoint so Claude Code, Claude Desktop, and other MCP
 └────────────────────────┬─────────────────────────────────────┘
                          │ HTTP + SSE
 ┌────────────────────────▼─────────────────────────────────────┐
-│           unified-hifi-control.exe  (Axum + Dioxus)           │
+│              roon-ai.exe  (Axum + Dioxus)                     │
 │                                                               │
 │  ┌──────────────────────────────────────────────────────┐    │
 │  │               Tokio Event Bus                         │    │
@@ -236,7 +236,7 @@ cargo build --release --features server
 
 ```powershell
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 ### Hot Reload (UI development)
@@ -244,12 +244,6 @@ $env:RUST_LOG="debug"
 ```bash
 dx serve --platform web --features web --port 8088
 ```
-
----
-
-## roon-knob Firmware
-
-The bridge automatically downloads new [roon-knob](https://github.com/muness/roon-knob) firmware from GitHub every 6 hours. Knobs check `/firmware/version` on startup and OTA-update directly from the bridge.
 
 ---
 

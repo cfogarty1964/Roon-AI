@@ -618,7 +618,7 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
     let api_key = state
         .anthropic_api_key
         .clone()
-        .ok_or_else(|| anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in unified-hifi-control.toml."))?;
+        .ok_or_else(|| anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in config.toml."))?;
 
     let client = AnthropicClient::new(api_key);
     let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref());
@@ -761,7 +761,7 @@ async fn run_agent_streaming_inner(
         .anthropic_api_key
         .clone()
         .ok_or_else(|| {
-            anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in unified-hifi-control.toml.")
+            anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in config.toml.")
         })?;
 
     let client = AnthropicClient::new(api_key);

@@ -1,4 +1,4 @@
-# Unified Hi-Fi Control — Architecture & Startup Guide
+# Roon AI — Architecture & Startup Guide
 
 **Version:** v3 (Rust rewrite)  
 **Port:** 8088  
@@ -8,7 +8,7 @@
 
 ## What It Does
 
-A source-agnostic hi-fi audio control bridge. It discovers and controls audio sources across your LAN under a single web UI and Claude AI / MCP interface.
+A natural-language Roon control bridge with a conversational AI agent (typed or spoken), library browser, and Claude MCP integration. Discovers Roon and UPnP/DLNA zones on the LAN and exposes them through a single web UI plus an MCP endpoint.
 
 **Supported sources:** Roon · UPnP/DLNA
 
@@ -23,7 +23,7 @@ A source-agnostic hi-fi audio control bridge. It discovers and controls audio so
 └───────────────────────────┬──────────────────────────────────────┘
                             │ HTTP + SSE
 ┌───────────────────────────▼──────────────────────────────────────┐
-│              unified-hifi-control.exe  (Axum server)              │
+│                 roon-ai.exe  (Axum server)                        │
 │                                                                    │
 │  ┌──────────────────────────────────────────────────────────┐    │
 │  │                    AdapterCoordinator                     │    │
@@ -100,7 +100,7 @@ cargo build --release --features server
 
 ```powershell
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 Open **http://localhost:8088**
@@ -112,20 +112,20 @@ Roon SOOD discovery starts automatically. Your Roon Core appears in Zones within
 **PowerShell** (recommended):
 ```powershell
 # Stop
-Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue
 
 # Start
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 **Git Bash / WSL**:
 ```bash
 # Stop
-taskkill //F //IM unified-hifi-control.exe
+taskkill //F //IM roon-ai.exe
 
 # Start
-RUST_LOG=debug ./target/release/unified-hifi-control.exe
+RUST_LOG=debug ./target/release/roon-ai.exe
 ```
 
 > Note: the running binary locks the `.exe` file on Windows. Always stop the process before rebuilding.
@@ -142,16 +142,16 @@ Recompiles and refreshes the browser on changes to `src/`.
 
 ```powershell
 $env:UHC_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 ---
 
 ## Configuration
 
-Config is stored in `%APPDATA%\unified-hifi-control\unified-hifi\` (Windows default) or the directory set by `UHC_CONFIG_DIR`.
+Config is stored in `%APPDATA%\unified-hifi-control\` (Windows default — preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs) or the directory set by `UHC_CONFIG_DIR`.
 
-**Main config** (`unified-hifi-control.toml`):
+**Main config** (`config.toml`):
 ```toml
 port = 8088
 
@@ -162,7 +162,7 @@ port = 8088
 api_key = "sk-ant-..."   # Anthropic API key for AI chat
 ```
 
-**State files**: `app-settings.json`, `roon_state.json`, `knobs.json`
+**State files**: `app-settings.json`, `roon_state.json`
 
 ---
 
@@ -171,19 +171,17 @@ api_key = "sk-ant-..."   # Anthropic API key for AI chat
 | Surface | How |
 |---------|-----|
 | Web UI | http://localhost:8088 |
-| AI Chat | http://localhost:8088/ai — natural language music control |
+| Conversational AI | http://localhost:8088/conversational — natural-language chat with voice in/out |
 | Claude AI (MCP) | MCP endpoint at http://localhost:8088/mcp |
-| ESP32 knob | Hardware volume/transport knob, managed via `/knobs` page |
 
 ### Web UI Pages
 
 | Route | Page |
 |-------|------|
 | `/` | Zones — all zones with transport + volume controls |
-| `/ai` | AI Music Control — natural language chat |
+| `/conversational` | Conversational AI — typed or spoken chat with streaming replies and persistent history |
 | `/library` | Library — browse Roon library |
-| `/knobs` | Knobs — ESP32 firmware management |
-| `/settings` | Settings — adapter enable/disable |
+| `/settings` | Settings — adapter enable/disable, voice picker, appearance |
 
 ### Claude AI / MCP Tools
 
@@ -213,22 +211,22 @@ Available tools: `hifi_zones` · `hifi_now_playing` · `hifi_control` · `hifi_s
 | [src/adapters/upnp.rs](src/adapters/upnp.rs) | UPnP/DLNA adapter (~900 lines) |
 | [src/coordinator.rs](src/coordinator.rs) | Adapter lifecycle manager |
 | [src/aggregator.rs](src/aggregator.rs) | Zone state aggregation |
-| [src/ai/mod.rs](src/ai/mod.rs) | AI chat — Anthropic API, tool loop, markdown rendering |
+| [src/ai/mod.rs](src/ai/mod.rs) | AI chat — Anthropic API, agentic tool loop, streaming SSE bridge, markdown rendering |
 | [src/mcp/mod.rs](src/mcp/mod.rs) | MCP tools (Claude AI) |
 | [src/bus/](src/bus/) | Tokio broadcast event bus |
-| [src/app/pages/ai_chat.rs](src/app/pages/ai_chat.rs) | AI chat UI page |
+| [src/app/pages/conversational_ai.rs](src/app/pages/conversational_ai.rs) | Conversational AI page — streaming chat, voice in/out, suggestion ▶ Play, now-playing banner |
 | [src/app/pages/library.rs](src/app/pages/library.rs) | Library browser page |
 | [src/app/default_zone.rs](src/app/default_zone.rs) | Default-zone context + localStorage persistence |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture detail |
+| [src/app/voice_context.rs](src/app/voice_context.rs) | TTS voice picker context (shared across pages, persisted in localStorage) |
 
 ---
 
 ## Default Zone
 
-A persistent default zone can be set from any page that has a zone picker (`/ai`, `/library`). A ☆ button sits next to the zone `<select>`; clicking it saves the current selection as the default (turns ★ yellow). The choice is stored in `localStorage` under the key `roon-ai-default-zone` and pre-selected automatically on every page load until changed.
+A persistent default zone can be set from any page that has a zone picker (`/conversational`, `/library`). A ☆ button sits next to the zone `<select>`; clicking it saves the current selection as the default (turns ★ yellow). The choice is stored in `localStorage` under the key `roon-ai-default-zone` and pre-selected automatically on every page load until changed.
 
-The shared state is managed by `DefaultZoneContext` (`src/app/default_zone.rs`), initialised at the app root alongside the theme and settings contexts.
+The shared state is managed by `DefaultZoneContext` (`src/app/default_zone.rs`), initialised at the app root alongside the theme and voice contexts.
 
 ---
 
-*Updated: 2026-04-19 — default zone persistence; Roon + UPnP only; AI chat with markdown rendering*
+*Updated: 2026-04-26 — knob/firmware/mDNS subsystem removed; AI page renamed to /conversational with streaming + voice in/out + now-playing context*

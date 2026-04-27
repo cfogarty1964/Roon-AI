@@ -1,9 +1,9 @@
 [package]
-name = "unified-hifi-control"
+name = "roon-ai"
 version = "0.0.0"  # Injected from git tag at build time
 edition = "2021"
 authors = ["Muness Castle"]
-description = "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"
+description = "Natural-language Roon control bridge with conversational AI agent and MCP server"
 license = "PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/open-horizon-labs/unified-hifi-control"
 
@@ -127,7 +127,7 @@ serde-wasm-bindgen = "0.6"
 getrandom = { version = "0.2", features = ["js"] }
 
 [[bin]]
-name = "unified-hifi-control"
+name = "roon-ai"
 path = "src/main.rs"
 
 [[bin]]

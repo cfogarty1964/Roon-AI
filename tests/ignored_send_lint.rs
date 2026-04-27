@@ -197,10 +197,22 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // Bus publish is fire-and-forget by design - it uses broadcast channels
     // where receivers may come and go, and missing a message is acceptable.
     ("bus/mod.rs", "Broadcast bus is fire-and-forget"),
+    // SSE streaming sends to an mpsc channel whose receiver is the HTTP
+    // response stream. When the client closes the tab mid-reply, the receiver
+    // drops and subsequent sends fail; that's the expected case, not an error.
+    ("ai/mod.rs", "SSE stream events are fire-and-forget on client disconnect"),
+    // Dioxus eval channel: client-side fetch/SSE consumer. Receiver is the JS
+    // task; if the page navigates away the channel closes — fine to drop.
+    ("conversational_ai.rs", "Dioxus eval channel is fire-and-forget on navigation"),
 ];
 
 fn is_allowed(file: &str) -> bool {
-    ALLOWLIST.iter().any(|(suffix, _)| file.ends_with(suffix))
+    // Normalise Windows backslashes to forward slashes so the allowlist
+    // suffixes (which use forward slashes) match on every platform.
+    let normalised = file.replace('\\', "/");
+    ALLOWLIST
+        .iter()
+        .any(|(suffix, _)| normalised.ends_with(suffix))
 }
 
 #[test]

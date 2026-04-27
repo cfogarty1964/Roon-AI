@@ -37,7 +37,7 @@ use tower::{Layer, Service};
 /// The `allow_missing = true` attribute lets this compile even when the folder doesn't exist
 /// (e.g., during development without running dx build first).
 #[derive(Embed)]
-#[folder = "target/dx/unified-hifi-control/release/web/public/"]
+#[folder = "target/dx/roon-ai/release/web/public/"]
 #[allow_missing = true]
 pub struct PublicAssets;
 

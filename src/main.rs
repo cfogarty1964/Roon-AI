@@ -1,11 +1,11 @@
-//! Unified Hi-Fi Control - Rust Implementation
+//! Roon AI - Rust Implementation
 //!
 //! A natural-language Roon control bridge with AI chat and voice control.
 
 // Server-only: full server implementation
 #[cfg(feature = "server")]
 mod server {
-    use unified_hifi_control::{
+    use roon_ai::{
         adapters, aggregator, api, app, bus, config, coordinator, embedded, mcp,
     };
 
@@ -45,7 +45,7 @@ mod server {
         // Priority: RUST_LOG > LOG_LEVEL (legacy) > default
         let log_filter = std::env::var("RUST_LOG")
             .or_else(|_| std::env::var("LOG_LEVEL"))
-            .unwrap_or_else(|_| "unified_hifi_control=debug,tower_http=debug,roon_api=info".into());
+            .unwrap_or_else(|_| "roon_ai=debug,tower_http=debug,roon_api=info".into());
 
         tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new(&log_filter))
@@ -356,7 +356,7 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
-            "unified-hifi-control {} ({})",
+            "roon-ai {} ({})",
             env!("UHC_VERSION"),
             env!("UHC_GIT_SHA")
         );
@@ -364,7 +364,7 @@ async fn main() -> anyhow::Result<()> {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "unified-hifi-control {} ({})",
+            "roon-ai {} ({})",
             env!("UHC_VERSION"),
             env!("UHC_GIT_SHA")
         );
@@ -374,7 +374,7 @@ async fn main() -> anyhow::Result<()> {
         );
         println!();
         println!("USAGE:");
-        println!("    unified-hifi-control [OPTIONS]");
+        println!("    roon-ai [OPTIONS]");
         println!();
         println!("OPTIONS:");
         println!("    -h, --help       Print help information");
@@ -393,7 +393,7 @@ async fn main() -> anyhow::Result<()> {
 // WASM entry point (client-side only)
 #[cfg(all(not(feature = "server"), target_arch = "wasm32"))]
 fn main() {
-    use unified_hifi_control::app;
+    use roon_ai::app;
     dioxus::launch(app::App);
 }
 

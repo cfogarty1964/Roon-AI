@@ -4,34 +4,22 @@
 #
 # Format: METHOD /path
 #
-# Note: UI routes (/, /ui/zones, /zone, /knobs, /settings)
-# are served by Dioxus SPA router (fallback handler), not explicit Axum routes.
+# Note: UI routes (/, /conversational, /library, /settings) are served by
+# the Dioxus SPA router (fallback handler), not explicit Axum routes.
 # They still work but aren't detected by the route extraction logic.
 #
-# Note: Embedded asset routes (/favicon.ico, /tailwind.css, /dx-components-theme.css,
-# /apple-touch-icon.png) are implementation details, not API contracts. They use
-# multi-line closures that the route extractor doesn't detect, and they may change
-# with build configuration.
+# Note: Embedded asset routes (/favicon.ico, /tailwind.css, /apple-touch-icon.png,
+# /dx-components-theme.css) and the multi-line UPnP per-zone now-playing route
+# are implementation details, not API contracts. They use multi-line closures
+# that the route extractor doesn't detect.
 
 DELETE /mcp
 GET /admin
 GET /api/settings
 GET /assets/{*path}
-GET /config/{knob_id}
 GET /control
 GET /events
-GET /firmware/download
-GET /firmware/version
-GET /knob/config
-GET /knob/devices
-GET /knob/now_playing
-GET /knob/now_playing/image
-GET /knob/zones
-GET /knobs/flash
-GET /manifest-s3.json
 GET /mcp
-GET /now_playing
-GET /now_playing/image
 GET /roon/browse/status
 GET /roon/image
 GET /roon/search
@@ -42,12 +30,12 @@ GET /status
 GET /upnp/status
 GET /upnp/zones
 GET /zones
+POST /api/ai/chat
+POST /api/ai/chat/stream
 POST /api/settings
-POST /control
-POST /knob/config
-POST /knob/control
 POST /mcp
 POST /roon/browse
+POST /roon/browse/load
 POST /roon/control
 POST /roon/play
 POST /roon/play_item

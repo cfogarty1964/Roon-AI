@@ -94,7 +94,7 @@ struct ErrorResponse {
 }
 
 // Use production BusEvent to keep schema in sync
-use unified_hifi_control::bus::{BusEvent, PrefixedZoneId};
+use roon_ai::bus::{BusEvent, PrefixedZoneId};
 
 // ============================================================================
 // Schema Validation Tests
@@ -106,7 +106,7 @@ mod status_schema {
     #[test]
     fn validates_status_response() {
         let json = json!({
-            "service": "unified-hifi-control",
+            "service": "roon-ai",
             "version": "0.1.0",
             "uptime_secs": 3600,
             "roon_connected": true,
@@ -124,7 +124,7 @@ mod status_schema {
     #[test]
     fn rejects_missing_fields() {
         let json = json!({
-            "service": "unified-hifi-control"
+            "service": "roon-ai"
             // Missing required fields
         });
 
@@ -586,54 +586,6 @@ mod bus_event_schema {
     }
 
     #[test]
-    fn validates_hqp_events() {
-        let events = vec![
-            BusEvent::HqpConnected {
-                host: "192.168.1.100".to_string(),
-            },
-            BusEvent::HqpDisconnected {
-                host: "192.168.1.100".to_string(),
-            },
-            BusEvent::HqpStateChanged {
-                host: "192.168.1.100".to_string(),
-                state: "playing".to_string(),
-            },
-            BusEvent::HqpPipelineChanged {
-                host: "192.168.1.100".to_string(),
-                filter: Some("poly-sinc-xtr".to_string()),
-                shaper: Some("NS9".to_string()),
-                rate: Some("44100->705600".to_string()),
-            },
-        ];
-
-        for event in events {
-            let json = serde_json::to_value(&event).unwrap();
-            let _: BusEvent = serde_json::from_value(json).expect("Should round-trip");
-        }
-    }
-
-    #[test]
-    fn validates_lms_events() {
-        let events = vec![
-            BusEvent::LmsConnected {
-                host: "192.168.1.101".to_string(),
-            },
-            BusEvent::LmsDisconnected {
-                host: "192.168.1.101".to_string(),
-            },
-            BusEvent::LmsPlayerStateChanged {
-                player_id: "aa:bb:cc:dd:ee:ff".to_string(),
-                state: "play".to_string(),
-            },
-        ];
-
-        for event in events {
-            let json = serde_json::to_value(&event).unwrap();
-            let _: BusEvent = serde_json::from_value(json).expect("Should round-trip");
-        }
-    }
-
-    #[test]
     fn validates_control_command() {
         let event = BusEvent::ControlCommand {
             zone_id: "zone-1".to_string(),
@@ -926,7 +878,7 @@ mod contract_tests {
     fn status_endpoint_contract() {
         // Simulate what the server would return
         let response = json!({
-            "service": "unified-hifi-control",
+            "service": "roon-ai",
             "version": "0.1.0",
             "uptime_secs": 0,
             "roon_connected": false,

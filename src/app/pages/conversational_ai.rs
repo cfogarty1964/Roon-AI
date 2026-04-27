@@ -9,6 +9,17 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)]
 const STORAGE_KEY: &str = "roon-ai-conversation";
 
+/// Ordered fragment of a streaming assistant reply. Text deltas and tool
+/// calls are interleaved in the order they arrive so the UI can render
+/// inline `⚡ tool` pills exactly where the agent paused. In-memory only —
+/// not persisted, since once streaming completes the bubble switches to the
+/// server's rendered HTML.
+#[derive(Clone, PartialEq)]
+enum StreamPart {
+    Text(String),
+    Tool(String),
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct ChatMessage {
     role: Role,
@@ -29,6 +40,10 @@ struct ChatMessage {
     /// false and `text` becomes the rendered HTML body.
     #[serde(default)]
     streaming: bool,
+    /// Interleaved text/tool fragments captured during the stream. Skipped
+    /// from serialization — only consulted while `streaming == true`.
+    #[serde(skip)]
+    stream_parts: Vec<StreamPart>,
 }
 
 /// Streaming events from the server, deserialised from each SSE message's
@@ -101,6 +116,7 @@ fn do_send_text(
         actions: vec![],
         suggestions: vec![],
         streaming: false,
+        stream_parts: vec![],
     });
     messages.write().push(ChatMessage {
         role: Role::Assistant,
@@ -109,6 +125,7 @@ fn do_send_text(
         actions: vec![],
         suggestions: vec![],
         streaming: true,
+        stream_parts: vec![],
     });
     let in_progress_idx = messages.read().len() - 1;
 
@@ -142,12 +159,19 @@ fn do_send_text(
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
                         m.text.push_str(&text);
+                        // Coalesce consecutive text deltas into one segment
+                        // so the inline render doesn't fragment a sentence.
+                        match m.stream_parts.last_mut() {
+                            Some(StreamPart::Text(t)) => t.push_str(&text),
+                            _ => m.stream_parts.push(StreamPart::Text(text)),
+                        }
                     }
                 }
                 Ok(AgentEvent::Tool { summary }) => {
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
-                        m.actions.push(summary);
+                        m.actions.push(summary.clone());
+                        m.stream_parts.push(StreamPart::Tool(summary));
                     }
                 }
                 Ok(AgentEvent::Done { response, response_markdown, suggestions }) => {
@@ -414,6 +438,31 @@ fn play_message_for(s: &Suggestion) -> String {
         (_, Some(al)) if !al.is_empty() => format!("Play \"{}\" from {}", s.title, al),
         _ => format!("Play \"{}\"", s.title),
     }
+}
+
+/// Dispatch a transport command to the right adapter endpoint based on zone
+/// prefix. Used by the now-playing banner buttons. Routes Roon zones to
+/// `/roon/control` and UPnP zones to `/upnp/control`. Errors are logged but
+/// not surfaced — SSE will reflect any failure as the UI state failing to
+/// update.
+fn do_transport(zone_id: String, action: &'static str) {
+    if zone_id.is_empty() {
+        return;
+    }
+    spawn(async move {
+        let url = if zone_id.starts_with("upnp:") {
+            "/upnp/control"
+        } else {
+            "/roon/control"
+        };
+        let body = serde_json::json!({ "zone_id": zone_id, "action": action });
+        if let Err(e) = crate::app::api::post_json_no_response(url, &body).await {
+            #[cfg(target_arch = "wasm32")]
+            web_sys::console::warn_1(&format!("Transport {action} failed: {e}").into());
+            #[cfg(not(target_arch = "wasm32"))]
+            tracing::warn!("Transport {} failed: {}", action, e);
+        }
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -707,6 +756,8 @@ pub fn ConversationalAi() -> Element {
 
             // Now-playing banner — shown when the selected zone has a track.
             // Gives Claude implicit context for "skip this", "more like this", etc.
+            // Also exposes ⏮ / ⏯ / ⏭ buttons that hit `/roon/control` directly
+            // (faster than routing the command through the agent loop).
             {
                 let track = current_track.read().clone();
                 rsx! {
@@ -730,6 +781,37 @@ pub fn ConversationalAi() -> Element {
                                         rsx! { span { class: "text-xs text-muted truncate", "{line}" } }
                                     } else {
                                         rsx! {}
+                                    }
+                                }
+                            }
+                            {
+                                let zid_prev = selected_zone.read().clone();
+                                let zid_play = selected_zone.read().clone();
+                                let zid_next = selected_zone.read().clone();
+                                let is_playing = t.is_playing;
+                                rsx! {
+                                    div { class: "flex items-center gap-1",
+                                        button {
+                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                            "aria-label": "Previous track",
+                                            title: "Previous",
+                                            onclick: move |_| do_transport(zid_prev.clone(), "previous"),
+                                            "⏮"
+                                        }
+                                        button {
+                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                            "aria-label": if is_playing { "Pause" } else { "Play" },
+                                            title: if is_playing { "Pause" } else { "Play" },
+                                            onclick: move |_| do_transport(zid_play.clone(), "play_pause"),
+                                            if is_playing { "⏸" } else { "▶" }
+                                        }
+                                        button {
+                                            class: "px-2 py-1 rounded-md hover:bg-muted text-base leading-none",
+                                            "aria-label": "Next track",
+                                            title: "Next",
+                                            onclick: move |_| do_transport(zid_next.clone(), "next"),
+                                            "⏭"
+                                        }
                                     }
                                 }
                             }
@@ -770,12 +852,38 @@ pub fn ConversationalAi() -> Element {
                                     Role::Assistant => rsx! {
                                         div { class: "self-start max-w-[90%] flex flex-col gap-2",
                                             if is_streaming {
-                                                // Plain-text rendering with whitespace preservation
-                                                // while the stream is in flight. Switches to
+                                                // Streaming render: walk the interleaved text/tool
+                                                // parts so tool calls show up as inline ⚡ pills
+                                                // exactly where the agent paused. Switches to
                                                 // dangerous_inner_html on the Done event.
                                                 div {
                                                     class: "rounded-2xl rounded-bl-sm bg-muted px-4 py-3 text-sm whitespace-pre-wrap",
-                                                    "{text}"
+                                                    {
+                                                        let parts = msg.stream_parts.clone();
+                                                        // Fall back to raw `text` for any in-flight
+                                                        // stream that predates the parts vector
+                                                        // (e.g. legacy localStorage hydration).
+                                                        if parts.is_empty() && !text.is_empty() {
+                                                            rsx! { "{text}" }
+                                                        } else {
+                                                            rsx! {
+                                                                for part in parts.iter() {
+                                                                    {
+                                                                        match part {
+                                                                            StreamPart::Text(t) => rsx! { "{t}" },
+                                                                            StreamPart::Tool(s) => rsx! {
+                                                                                span {
+                                                                                    class: "inline-block mx-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-mono align-baseline",
+                                                                                    title: "Tool call",
+                                                                                    "⚡ {s}"
+                                                                                }
+                                                                            },
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                     span { class: "inline-block w-2 h-4 ml-0.5 bg-muted-foreground/60 animate-pulse align-middle" }
                                                 }
                                             } else {

@@ -5,7 +5,7 @@
 //!
 //! Fix: Use zone's actual volume range (e.g., -64 to 0 dB).
 
-use unified_hifi_control::adapters::roon::{clamp, get_volume_range, Output, VolumeInfo};
+use roon_ai::adapters::roon::{clamp, get_volume_range, Output, VolumeInfo};
 
 // =============================================================================
 // dB scale zones (HQPlayer-like)

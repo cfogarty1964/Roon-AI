@@ -396,7 +396,7 @@ fn validate(schema_type: &str, json: &str) {
 fn generate_example(schema_type: &str) {
     let example: Value = match schema_type {
         "status" => serde_json::json!({
-            "service": "unified-hifi-control",
+            "service": "roon-ai",
             "version": "0.1.0",
             "uptime_secs": 3600,
             "roon_connected": true,

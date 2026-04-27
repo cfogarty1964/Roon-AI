@@ -18,7 +18,20 @@
       "Bash(gh pr edit:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr comment:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(taskkill //F //IM roon-ai.exe)",
+      "Bash(RUST_LOG=debug ./target/release/roon-ai.exe)",
+      "Bash(git reset *)",
+      "Bash(git remote *)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(rustup target *)",
+      "Bash(dx --version)",
+      "Bash(CARGO_TARGET_DIR=\"C:/cargo-targets/roon-ai\" cargo build --release --features server)",
+      "Bash(CARGO_TARGET_DIR=\"C:/cargo-targets/roon-ai\" cargo build --release --features server -j1)",
+      "Bash(mkdir -p \"C:/Users/ChrisFogarty/AppData/Roaming/unified-hifi-control\")",
+      "Bash(echo 'port = 8088 *)",
+      "PowerShell(Start-ScheduledTask -TaskName \"RoonAI\")"
     ]
   }
 }

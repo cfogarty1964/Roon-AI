@@ -110,7 +110,7 @@ pub async fn status_handler(State(state): State<AppState>) -> Json<StatusRespons
     let upnp_status = state.upnp.get_status().await;
 
     Json(StatusResponse {
-        service: "unified-hifi-control",
+        service: "roon-ai",
         version: env!("UHC_VERSION"),
         git_sha: env!("UHC_GIT_SHA"),
         uptime_secs: state.start_time.elapsed().as_secs(),
