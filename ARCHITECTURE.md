@@ -105,7 +105,7 @@ $env:RUST_LOG="debug"
 
 Open **http://localhost:8088**
 
-Roon SOOD discovery starts automatically. Your Roon Core appears in Zones within seconds. Authorise once in **Roon Settings → Extensions**.
+Roon SOOD discovery starts automatically. Your Roon Core's zones appear in the Conversational AI zone picker (and the now-playing banner) within seconds. Authorise once in **Roon Settings → Extensions**.
 
 ### Stop / Restart
 
@@ -170,16 +170,14 @@ api_key = "sk-ant-..."   # Anthropic API key for AI chat
 
 | Surface | How |
 |---------|-----|
-| Web UI | http://localhost:8088 |
-| Conversational AI | http://localhost:8088/conversational — natural-language chat with voice in/out |
+| Web UI | http://localhost:8088 (Conversational AI is the home page) |
 | Claude AI (MCP) | MCP endpoint at http://localhost:8088/mcp |
 
 ### Web UI Pages
 
 | Route | Page |
 |-------|------|
-| `/` | Zones — all zones with transport + volume controls |
-| `/conversational` | Conversational AI — typed or spoken chat with streaming replies and persistent history |
+| `/` | Conversational AI — typed or spoken chat with streaming replies, now-playing banner with ⏮/⏯/⏭ transport, persistent history |
 | `/library` | Library — browse Roon library |
 | `/settings` | Settings — adapter enable/disable, voice picker, appearance |
 
@@ -223,10 +221,10 @@ Available tools: `hifi_zones` · `hifi_now_playing` · `hifi_control` · `hifi_s
 
 ## Default Zone
 
-A persistent default zone can be set from any page that has a zone picker (`/conversational`, `/library`). A ☆ button sits next to the zone `<select>`; clicking it saves the current selection as the default (turns ★ yellow). The choice is stored in `localStorage` under the key `roon-ai-default-zone` and pre-selected automatically on every page load until changed.
+A persistent default zone can be set from any page that has a zone picker (the home Conversational AI page, `/library`). A ☆ button sits next to the zone `<select>`; clicking it saves the current selection as the default (turns ★ yellow). The choice is stored in `localStorage` under the key `roon-ai-default-zone` and pre-selected automatically on every page load until changed.
 
 The shared state is managed by `DefaultZoneContext` (`src/app/default_zone.rs`), initialised at the app root alongside the theme and voice contexts.
 
 ---
 
-*Updated: 2026-04-26 — knob/firmware/mDNS subsystem removed; AI page renamed to /conversational with streaming + voice in/out + now-playing context*
+*Updated: 2026-04-27 — Zones page removed (Conversational AI is now the home page at `/`); transport buttons + inline tool indicators on conversational page; binary renamed to `roon-ai`*

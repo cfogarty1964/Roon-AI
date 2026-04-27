@@ -1936,4 +1936,61 @@ Two natural next sessions:
 - **Commit + push + #3 (multiple saved conversations).** Half a day. Ships today's cleanup and adds the last big ergonomic feature.
 - **Just commit + push.** The project is in a notably good state — test suite green, binary renamed, UI polished, docs accurate. A pause-and-take-stock moment that lets the work settle before the next push.
 
+---
+
+## Recent Work (2026-04-27, second pass) — Zones Page Removal
+
+### Why
+
+After the rename pushed and the binary verified live, a quick check of the Zones page revealed every zone showing "Nothing playing" even when music was clearly running. Root cause: `src/app/pages/zones.rs` was issuing N+1 fetches against `GET /now_playing?zone_id=...` plus `POST /control` — both routes deleted in the knob cleanup (commit `a9989d1`). The Zones page had been silently broken since that commit.
+
+Two paths considered:
+
+1. **Fix it** — refactor zones.rs to read state/now-playing/volume directly from the existing `/zones` payload, route transport via `/roon/control` and `/upnp/control` based on zone-id prefix. Add `volume_control` and `is_*_allowed` to the client `Zone` struct. (This was actually implemented and compiled cleanly before being reverted — see below.)
+2. **Remove it** — the Conversational AI page already has a zone picker, a now-playing banner with ⏮/⏯/⏭ buttons (added earlier today as #10), and ▶ Play suggestion rows. The Zones page's "all zones at once" overview was the only unique value, and that's marginal for a single-user setup that mostly drives one zone at a time.
+
+Chose option 2. The Conversational AI surface covers everything that mattered.
+
+### Files deleted
+
+- `src/app/pages/zones.rs` (340 lines) — the page itself
+- `src/app/components/volume.rs` (~140 lines) — `VolumeControlsCompact` and `VolumeControlsFull`, both consumed only by the Zones page
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `src/app/mod.rs` | Removed `Zones` from page imports; removed `Route::Zones` enum variant; mapped `/` to `ConversationalAi` (the conversational page is now the home — `/conversational` no longer exists) |
+| `src/app/pages/mod.rs` | Removed `mod zones;` and `pub use zones::Zones;` |
+| `src/app/components/mod.rs` | Removed `pub mod volume;` and the re-exports of `VolumeControlsCompact`/`VolumeControlsFull` |
+| `src/app/components/nav.rs` | Brand link now goes to `Route::ConversationalAi` (which is `/`) instead of `Route::Zones`; removed the desktop and mobile "Zones" nav links |
+| `src/app/api.rs` | Reverted the brief `volume_control: Option<ZoneVolumeControl>` and four `is_*_allowed: bool` fields I had added to client `Zone` for option 1; deleted the `ZoneVolumeControl` struct and the rich `NowPlaying` client struct (only `Zones` consumed it) |
+| `README.md` | Routes table — `/` row now Conversational AI; dropped Zones row. Features bullet — replaced "Zones page" with "Conversational AI (home page)". Conversational AI section header updated to note `/` is the home. Config TOML comment updated to drop `/conversational`. |
+| `ARCHITECTURE.md` | Surfaces table — dropped the redundant Conversational AI row (`/` is now the home). Web UI Pages — Zones row dropped, `/` now Conversational AI. Default Zone section — refers to "the home Conversational AI page, `/library`". Date stamp refreshed. |
+
+### Behaviour changes for users
+
+- **`/` is now the Conversational AI page** (formerly Zones).
+- **`/conversational` no longer exists** — bookmarks pointing at it 404. The shorter URL is the canonical one now.
+- The brand logo in the nav still links to home (which is now Conversational AI rather than Zones).
+- Nav order in the desktop + mobile menus is now: Conversational AI · Library · Settings.
+
+### Build + smoke
+
+`cargo check --features server` passes (one pre-existing dead-code warning, unrelated). Full release rebuild needed before this is visible at runtime — same incantation as always:
+
+```bash
+mkdir -p tmp_css
+./tailwindcss.exe -i src/input.css -o tmp_css/tailwind.css --content "src/app/**/*.rs"
+mv tmp_css/tailwind.css public/tailwind.css && rmdir tmp_css
+dx build --release --platform web --features web
+cargo build --release --features server
+```
+
+Then `Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue` and re-launch.
+
+### Note on candidate item #13
+
+The earlier candidate item #13 ("Rename `/conversational` → `/ai`, the shorter URL is more natural") is effectively superseded — `/` is now even shorter, and there's no reason to also have `/ai` as a separate route. Item #13 can be considered done in spirit.
+
 Or sit with what's there. The conversational AI surface is in a notably good state — streaming + voice + history + suggestions + now-playing context all working together — and is fundamentally different from where it was at the start of the day.

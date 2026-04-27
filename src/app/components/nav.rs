@@ -34,7 +34,7 @@ pub fn Nav(props: NavProps) -> Element {
             div { class: "nav-inner",
                 // Logo / Brand
                 div { class: "flex items-center",
-                    Link { class: "nav-brand flex items-center", to: Route::Zones {},
+                    Link { class: "nav-brand flex items-center", to: Route::ConversationalAi {},
                         img {
                             src: "{*LOGO_DATA_URL}",
                             alt: "Roon AI",
@@ -45,9 +45,8 @@ pub fn Nav(props: NavProps) -> Element {
 
                 // Desktop navigation - use Link for client-side routing (no page reload)
                 div { class: "hidden lg:flex items-center space-x-4",
-                    Link { class: nav_link_class("zones"), to: Route::Zones {}, "Zones" }
-                    Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
                     Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, "Conversational AI" }
+                    Link { class: nav_link_class("library"), to: Route::Library {}, "Library" }
                     Link { class: nav_link_class("settings"), to: Route::Settings {}, "Settings" }
                 }
 
@@ -76,9 +75,8 @@ pub fn Nav(props: NavProps) -> Element {
             // Mobile menu - use Link for client-side routing
             div { class: "{mobile_menu_class}", id: "mobile-menu",
                 div { class: "px-2 pt-2 pb-3 space-y-1",
-                    Link { class: nav_link_class("zones"), to: Route::Zones {}, onclick: move |_| menu_open.set(false), "Zones" }
-                    Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
                     Link { class: nav_link_class("conversational"), to: Route::ConversationalAi {}, onclick: move |_| menu_open.set(false), "Conversational AI" }
+                    Link { class: nav_link_class("library"), to: Route::Library {}, onclick: move |_| menu_open.set(false), "Library" }
                     Link { class: nav_link_class("settings"), to: Route::Settings {}, onclick: move |_| menu_open.set(false), "Settings" }
                 }
             }

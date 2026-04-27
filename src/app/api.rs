@@ -84,23 +84,6 @@ pub struct ZonesResponse {
     pub zones: Vec<Zone>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub struct NowPlaying {
-    pub line1: Option<String>,
-    pub line2: Option<String>,
-    pub line3: Option<String>,
-    pub image_url: Option<String>,
-    /// Image key for cache busting (changes when track changes)
-    pub image_key: Option<String>,
-    pub is_playing: bool,
-    pub volume: Option<f32>,
-    pub volume_type: Option<String>,
-    /// Volume step size (e.g., 0.5 for Roon)
-    pub volume_step: Option<f32>,
-    pub is_previous_allowed: bool,
-    pub is_next_allowed: bool,
-}
-
 // =============================================================================
 // Roon Browse Types
 // =============================================================================

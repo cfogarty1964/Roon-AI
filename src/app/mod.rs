@@ -15,7 +15,7 @@ pub mod theme;
 pub mod voice_context;
 
 use default_zone::use_default_zone_provider;
-use pages::{ConversationalAi, Library, Settings, Zones};
+use pages::{ConversationalAi, Library, Settings};
 use sse::use_sse_provider;
 use theme::use_theme_provider;
 use voice_context::use_voice_provider;
@@ -40,12 +40,14 @@ pub fn App() -> Element {
     }
 }
 
-/// Application routes
+/// Application routes. The Conversational AI page lives at the root —
+/// historically it was at `/conversational` and `/` belonged to a separate
+/// Zones overview page; the Zones page was removed since the conversational
+/// surface (zone picker + now-playing banner + transport buttons) covers the
+/// same functionality more naturally.
 #[derive(Clone, Routable, Debug, PartialEq)]
 pub enum Route {
     #[route("/")]
-    Zones {},
-    #[route("/conversational")]
     ConversationalAi {},
     #[route("/library")]
     Library {},

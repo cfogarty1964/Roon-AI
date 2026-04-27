@@ -12,8 +12,7 @@ Control your music with your voice, a chat message, or a browser — all from on
 
 ## Features
 
-- **Zones page** — all Roon and UPnP zones at a glance, with transport and volume controls
-- **Conversational AI** — type or speak natural-language requests ("play late-night jazz piano on the living room"), hear responses spoken back, see what's playing on the selected zone in context. Streaming replies, hands-free mode, persistent multi-turn history, ▶ Play suggestion buttons.
+- **Conversational AI (home page)** — type or speak natural-language requests ("play late-night jazz piano on the living room"), hear responses spoken back, see what's playing on the selected zone in a banner with ⏮ / ⏯ / ⏭ buttons. Streaming replies, hands-free mode, persistent multi-turn history, ▶ Play suggestion buttons.
 - **Library browser** — browse your Roon library by genre, artist, composer, album; alphabet filter and grid layout for large collections; one-tap playback
 - **Persistent default zone** — set a default zone (★) from any zone picker; it pre-selects on every page until changed
 - **MCP server** — Claude AI tools for external agents and Claude Code
@@ -95,7 +94,7 @@ port = 8088
 # display_name = "optional"
 
 [ai]
-api_key = "sk-ant-..."   # Anthropic API key — enables the /conversational chat page
+api_key = "sk-ant-..."   # Anthropic API key — enables the conversational AI page
 ```
 
 **Key environment variables:**
@@ -111,7 +110,7 @@ api_key = "sk-ant-..."   # Anthropic API key — enables the /conversational cha
 
 ## Conversational AI
 
-The `/conversational` page lets you control your music with natural language — typed or spoken. It uses the Claude API (claude-sonnet-4-6) with a multi-turn tool-use loop, streaming replies via SSE, and the browser's built-in speech APIs for voice input and TTS.
+The home page (`/`) is the conversational AI surface. It lets you control your music with natural language — typed or spoken. Uses the Claude API (claude-sonnet-4-6) with a multi-turn tool-use loop, streaming replies via SSE, and the browser's built-in speech APIs for voice input and TTS.
 
 **Requirements:** an Anthropic API key ([console.anthropic.com](https://console.anthropic.com/settings/keys)). Set it in the config file or via `ANTHROPIC_API_KEY`. On startup the server logs either:
 - `AI chat enabled (Anthropic API key found)`
@@ -134,8 +133,7 @@ A "Now playing" banner above the chat shows the current track on the selected zo
 
 | Route | Page | Purpose |
 |-------|------|---------|
-| `/` | Zones | All zones, now-playing, transport + volume |
-| `/conversational` | Conversational AI | Natural-language chat with voice in/out, streaming, persistent history |
+| `/` | Conversational AI | Natural-language chat with voice in/out, streaming, now-playing banner with transport buttons, persistent history |
 | `/library` | Library | Browse Roon library with alphabet filter |
 | `/settings` | Settings | Adapter enable/disable, voice picker, appearance |
 
