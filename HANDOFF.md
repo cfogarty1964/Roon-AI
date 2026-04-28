@@ -2786,3 +2786,183 @@ The day's three tags are a complete arc — UI polish (v3.4.0), pragmatic featur
 - **#1 (wake word)** if voice keeps becoming primary input — pair with #5 for the full treatment.
 
 Or, as before — the project ships a coherent feature set under a coherent name on a sensible secure foundation. The next priority is best discovered by living with it.
+
+---
+
+## Plan — Voice UX Polish (next 1-3 sessions)
+
+Two related but separable enhancements that complete the conversational-voice surface:
+
+- **Better voices** — replace per-browser TTS quality (which only sounds great on Edge) with cloud-quality TTS so every browser sounds the same
+- **Wake word** — drop the "click the mic, then talk" friction; "Hey Roon AI" instead
+
+Both ride on infrastructure already in place: the speech.js JS module, the Settings voice picker, the continuous-mode loop in `src/app/pages/conversational_ai.rs`. Neither requires server architectural changes — they extend existing code paths.
+
+### Prerequisites (user actions, before any code work)
+
+**For Phase 1 (Better voices) — OpenAI API key:**
+1. Sign in at platform.openai.com → create an API key
+2. Add to `%APPDATA%\roon-ai\config.toml`:
+   ```toml
+   [ai]
+   api_key = "<existing Anthropic key>"
+   openai_api_key = "<new OpenAI key>"
+   ```
+3. Cost guidance: ~$0.005 per AI reply (~300 chars typical) → $5 covers ~1000 replies. Negligible.
+
+**For Phase 2 (Wake word) — Picovoice access key + trained model:**
+1. Sign up at console.picovoice.ai (free for personal use)
+2. Train a wake word at console.picovoice.ai → "Hey Roon AI" (3+ syllables for accuracy; "Roon" alone is too short and false-triggers)
+3. Platform: **WebAssembly**. Download the `.ppn` file
+4. Drop the `.ppn` into `public/wake-word/Hey-Roon-AI_en.ppn` (rust-embed already bakes `public/` into the binary)
+5. Copy the access key to `config.toml`:
+   ```toml
+   [voice]
+   picovoice_access_key = "..."
+   ```
+
+---
+
+### Phase 1 — Better voices (OpenAI TTS) [~2-3h]
+
+Goal: when the user picks an OpenAI voice on Settings, AI replies are spoken via OpenAI's TTS API. Browser voices stay available as the default fallback.
+
+#### Step 1.1 — Server endpoint (~30 min)
+- Add `POST /api/tts` in `src/api/mod.rs`:
+  - Body: `{ text: String, voice: String }` — voices: alloy/echo/fable/onyx/nova/shimmer
+  - Calls `https://api.openai.com/v1/audio/speech` with model `gpt-4o-mini-tts` (cheap, fast)
+  - Streams MP3 response back to client (chunked transfer; `axum::response::Body` from a `reqwest::Response::bytes_stream()`)
+  - Returns 503 if no OpenAI key configured; 4xx passes through OpenAI's error
+- Register route in `src/main.rs` next to `/api/ai/chat`
+
+#### Step 1.2 — Config plumbing (~15 min)
+- `src/config/mod.rs`: extend `AiConfig` with `pub openai_api_key: Option<String>`
+- New resolver `resolve_openai_api_key(config) -> Option<String>` mirroring `resolve_anthropic_api_key`
+- Precedence: env var `OPENAI_API_KEY` > `config.toml` `[ai] openai_api_key`
+
+#### Step 1.3 — Settings UI (~30 min)
+- Existing voice picker (`src/app/pages/settings.rs`) shows browser voices via `speechSynthesis.getVoices()`
+- Add a "Provider" segmented control above the picker: **Browser** / **OpenAI**
+- When OpenAI is selected, the picker switches to the 6 OpenAI voices
+- Selection persists to `localStorage` (existing pattern)
+
+#### Step 1.4 — Client TTS hook (~45 min)
+- `assets/speech.js` (or wherever the speak function lives — probably `src/app/components/speech.js`) gains a branch:
+  - Browser provider → existing `new SpeechSynthesisUtterance(text)` flow
+  - OpenAI provider → `fetch('/api/tts', { method: 'POST', body: JSON.stringify({text, voice}) })` → `response.blob()` → `URL.createObjectURL(blob)` → `new Audio(url).play()`
+- Cancellation: on new speak request, abort the prior fetch (`AbortController`) and stop current audio. Mirror the existing speech-cancel pattern that's already in there for browser TTS.
+
+#### Step 1.5 — Streaming playback (optional polish, +30 min)
+- OpenAI TTS streams chunked MP3
+- Use `MediaSource` + `SourceBuffer` API to start playback before fetch completes
+- Saves ~300-500ms perceived latency on first byte
+- Skip this if you hit the MediaSource cross-browser-bug rabbit hole
+
+#### Verification (Phase 1)
+- Settings → Voice provider → OpenAI → pick "alloy" → ask AI a question → reply spoken in alloy's voice
+- Same on Chrome, Firefox, Safari, mobile — all sound identical
+- Latency: ~500-700ms from text-ready to audio-start (without 1.5; ~200-300ms with)
+
+---
+
+### Phase 2 — Wake word (Picovoice Porcupine) [~half day]
+
+Goal: with hands-free mode enabled, saying "Hey Roon AI" starts STT — no mouse click. Wake word listening pauses during AI responses so the AI saying the phrase doesn't self-trigger.
+
+#### Step 2.1 — Bundle Porcupine for the browser (~30 min)
+- Add to `public/wake-word/`:
+  - `pv_porcupine.wasm` (Picovoice's Porcupine WASM binary, ~700kB)
+  - `porcupine_web.min.js` (the JS wrapper, from `@picovoice/porcupine-web`)
+  - `Hey-Roon-AI_en.ppn` (your trained wake-word model)
+- Vendor over CDN: works offline, no third-party uptime risk, version pinning is explicit
+- `rust-embed` automatically picks up `public/` contents — no extra work
+
+#### Step 2.2 — JS wake-word module (~1.5h)
+- New file `assets/wake_word.js`:
+  ```js
+  // Pseudocode — wraps PorcupineWeb's lifecycle
+  export async function init(accessKey, ppnUrl) { ... }
+  export function start() { /* engine.start() */ }
+  export function stop() { /* engine.pause() */ }
+  export function onDetection(callback) { /* register listener */ }
+  ```
+- Pattern mirrors existing `assets/speech.js` (init/start/stop/event-callback)
+- Uses Picovoice's `WebVoiceProcessor` to share the mic with the existing STT flow
+
+#### Step 2.3 — Settings UI (~30 min)
+- New "Hands-free mode" section on the Settings page
+- Toggle: "Wake word (Hey Roon AI)" — off by default
+- Picovoice access key input (password-style; persists to localStorage; sent in API calls when needed)
+- Status pill: "🎙️ Listening for wake word" / "💤 Not listening"
+
+#### Step 2.4 — Wire into conversational_ai.rs (~1h)
+- New signal `wake_word_enabled: Signal<bool>`, persisted to localStorage
+- `use_effect` watches `wake_word_enabled`:
+  - true → call `wake_word.init(...)` then `wake_word.start()`
+  - false → call `wake_word.stop()`
+- On wake-word detection event → trigger the existing STT-start handler (same code path the mic-click button uses today)
+- During AI response TTS playback: `wake_word.stop()`
+- After TTS done (existing event hook): `wake_word.start()`
+
+#### Step 2.5 — Polish (~1h)
+- Short audio "ding" on wake-word detection (so the user knows they were heard)
+- Mic icon in the conversational UI pulses when wake word is armed
+- Debounce: ignore detection events within 500ms of the prior (handles brief noise / echo)
+- `document.visibilitychange` listener: pause wake-word when tab is hidden (browser mic policies vary in background tabs; saves CPU + avoids weird behavior)
+
+#### Verification (Phase 2)
+- Toggle on; say "Hey Roon AI, play some jazz" without touching the mouse → AI responds and plays jazz
+- Music playing in another zone shouldn't false-trigger (low rate; tunable via Picovoice's sensitivity setting)
+- AI saying "Hey Roon" in its response shouldn't restart STT (because we paused wake-word during TTS)
+
+---
+
+### Phase 3 — Per-token TTS streaming (optional follow-up) [~1d]
+
+Goal: AI starts speaking ~1-2s after the user stops talking, not waiting for the full reply to generate.
+
+#### Approach
+- LLM streams via SSE already (existing code path in `/api/ai/chat/stream`)
+- Client buffers incoming tokens until a sentence boundary (regex on `[.?!]\s+[A-Z0-9]` or 100-char fallback)
+- Each completed sentence → fire `/api/tts` with that sentence
+- TTS responses queued in an HTML5 Audio playlist, playing in order
+- When LLM stream ends, flush any remaining buffered text through TTS
+
+#### Tricky bits
+- Sentence segmentation: needs to handle abbreviations ("Mr.", "3.14", "etc."), markdown formatting, non-English punctuation
+- Out-of-order completion: TTS calls return at different times depending on sentence length → must reorder via sequence numbers before playback
+- Cancellation: if user starts speaking again before reply finishes, abort all pending TTS calls + stop audio queue
+
+#### Verification (Phase 3)
+- Time from "user finishes speaking" to "AI starts speaking" drops from ~5-8s to ~1-2s
+- Audio across sentence boundaries is smooth (no perceptible gap)
+- Cancel mid-reply works cleanly
+
+---
+
+### Out of scope / future considerations
+
+- **Voice cloning (ElevenLabs et al.)** — quality is *very* good but cost is ~10× OpenAI; skip unless studio voiceover is actually wanted
+- **Local TTS via WASM** (Whisper-style) — too CPU-heavy in browser, skip
+- **Per-user voice profiles** — single-user app for now; defer until household sharing matters
+- **Server-side wake word** — privacy worse, no benefit over browser-side; skip
+
+### Tests to add
+
+- **Phase 1**: integration test for `/api/tts` against a mocked OpenAI response. Lint test ensuring `OPENAI_API_KEY` is never logged.
+- **Phase 2**: E2E Playwright test for Settings toggle persistence. Wake-word detection itself is hard to unit-test without a mic — rely on manual verification + smoke checklist.
+- **Phase 3**: unit test for sentence segmentation on a corpus of edge cases (abbreviations, numbers, markdown).
+
+### Recommended sequence + version cadence
+
+1. **Phase 1 first** (~2-3h): better voices. Immediate quality win on every browser, only OpenAI key needed. Ship as **v3.5.1** (patch — additive, no architectural change).
+2. **Phase 2 second** (~half day): wake word. Bigger UX leap, needs Picovoice account + `.ppn` training. Ship as **v3.6.0** (minor — new feature surface).
+3. **Phase 3 third** (~1d): per-token TTS streaming. Only worth doing after 1 + 2; turns the system into a *fast* voice assistant. Ship as **v3.6.1** or **v3.7.0** depending on how invasive the chunking refactor turns out.
+
+Worst case for all three: ~2 days of work across 2-3 sessions. Best case (if all three slot together cleanly): one focused day.
+
+### Decision points for the user before code starts
+
+- **TTS model**: `gpt-4o-mini-tts` ($0.60/1M chars, fast) vs `tts-1-hd` ($30/1M chars, slightly nicer). Recommendation: start with mini-tts; upgrade if quality is the issue.
+- **Wake-word phrase**: Picovoice training accepts any phrase; longer = more accurate. "Hey Roon AI" is recommended. Alternatives: "Hey RooAI", "OK Roon" (worse — short).
+- **Picovoice tier**: free covers personal use up to 3 users. If the household grows, $200-300/yr Standard tier handles unlimited users. Start free.
