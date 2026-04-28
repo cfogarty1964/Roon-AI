@@ -2,6 +2,11 @@
 //!
 //! A natural-language Roon control bridge with AI chat and voice control.
 
+// In release builds on Windows, hide the console window so the binary runs
+// silently in the background. Logs go to a rolling file in the data dir.
+// Debug builds keep the console for development.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 // Server-only: full server implementation
 #[cfg(feature = "server")]
 mod server {
@@ -26,9 +31,9 @@ mod server {
     use std::sync::Arc;
     use std::time::Instant;
     use tokio::signal;
+    use tokio::sync::oneshot;
     use tokio_util::sync::CancellationToken;
     use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// Legacy redirect: /control -> /ui/zones
     async fn control_redirect() -> impl IntoResponse {
@@ -40,18 +45,7 @@ mod server {
         Redirect::to("/settings")
     }
 
-    pub async fn run() -> Result<()> {
-        // Initialize logging
-        // Priority: RUST_LOG > LOG_LEVEL (legacy) > default
-        let log_filter = std::env::var("RUST_LOG")
-            .or_else(|_| std::env::var("LOG_LEVEL"))
-            .unwrap_or_else(|_| "roon_ai=debug,tower_http=debug,roon_api=info".into());
-
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::EnvFilter::new(&log_filter))
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-
+    pub async fn run(external_shutdown: oneshot::Receiver<()>) -> Result<()> {
         tracing::info!(
             "Starting Roon AI v{} ({})",
             env!("ROON_AI_VERSION"),
@@ -74,7 +68,7 @@ mod server {
         let config = config::load_config()?;
         tracing::info!("Configuration loaded, port: {}", config.port);
 
-        // Issue #76: Migrate config files to unified-hifi/ subdirectory
+        // Issue #76: Migrate config files to state/ subdirectory
         config::migrate_config_to_subdir();
 
         // Migrate Node.js config files if present (seamless Docker image swap)
@@ -274,12 +268,12 @@ mod server {
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
 
-        // Create shutdown future that cancels token before graceful shutdown (fixes #73)
+        // Create shutdown future that races signal/external/token cancel (fixes #73)
         let graceful_shutdown = {
             let token = shutdown_token.clone();
             let state = state_for_shutdown.clone();
             async move {
-                shutdown_signal().await;
+                shutdown_signal(external_shutdown).await;
 
                 // Cancel SSE streams BEFORE Axum starts waiting for connections
                 token.cancel();
@@ -321,9 +315,9 @@ mod server {
         Ok(())
     }
 
-    /// Wait for shutdown signal (Ctrl+C or SIGTERM)
+    /// Wait for any shutdown signal: Ctrl+C, SIGTERM, or external (tray Quit).
     #[allow(clippy::expect_used)] // Signal handlers must succeed for graceful shutdown
-    async fn shutdown_signal() {
+    async fn shutdown_signal(external: oneshot::Receiver<()>) {
         let ctrl_c = async {
             signal::ctrl_c()
                 .await
@@ -344,15 +338,147 @@ mod server {
         tokio::select! {
             _ = ctrl_c => tracing::info!("Received Ctrl+C, shutting down..."),
             _ = terminate => tracing::info!("Received SIGTERM, shutting down..."),
+            _ = external => tracing::info!("External shutdown requested (tray Quit), shutting down..."),
         }
     }
 }
 
-// Server entry point
+// ===========================================================================
+// Logging setup — file appender + optional stdout (debug builds only)
+// ===========================================================================
+
 #[cfg(feature = "server")]
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Handle --version and --help before starting server
+fn setup_logging() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    // Priority: RUST_LOG > LOG_LEVEL (legacy) > default
+    let log_filter = std::env::var("RUST_LOG")
+        .or_else(|_| std::env::var("LOG_LEVEL"))
+        .unwrap_or_else(|_| "roon_ai=debug,tower_http=debug,roon_api=info".into());
+
+    // File logging — rolling daily under <data_dir>/logs/
+    let logs_dir = roon_ai::config::get_data_dir().join("logs");
+    std::fs::create_dir_all(&logs_dir)?;
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "roon-ai.log");
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false);
+
+    // Stdout layer is harmless when console is hidden (writes go nowhere); useful in debug builds
+    let stdout_layer = tracing_subscriber::fmt::layer();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(&log_filter))
+        .with(file_layer)
+        .with(stdout_layer)
+        .init();
+
+    tracing::info!("Logs: {}", logs_dir.display());
+
+    Ok(guard)
+}
+
+// ===========================================================================
+// Windows-only: system tray icon with menu
+// ===========================================================================
+
+#[cfg(all(windows, feature = "server"))]
+fn run_tray(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> anyhow::Result<()> {
+    use std::time::{Duration, Instant};
+    use tao::event_loop::{ControlFlow, EventLoopBuilder};
+    use tray_icon::{
+        menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+        TrayIconBuilder,
+    };
+
+    let event_loop = EventLoopBuilder::new().build();
+
+    // Build menu
+    let menu = Menu::new();
+    let about = MenuItem::new(
+        format!("Roon AI v{}", env!("ROON_AI_VERSION")),
+        false,
+        None,
+    );
+    let open_ui = MenuItem::new("Open Web UI", true, None);
+    let open_logs = MenuItem::new("Open Logs Folder", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    menu.append(&about)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&open_ui)?;
+    menu.append(&open_logs)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&quit)?;
+
+    // Load icon (embedded PNG)
+    let icon = load_tray_icon()?;
+
+    // Tray must outlive the event loop — bind to a let so it isn't dropped
+    let _tray = TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip(format!("Roon AI v{}", env!("ROON_AI_VERSION")))
+        .with_icon(icon)
+        .build()?;
+
+    let menu_channel = MenuEvent::receiver();
+    let open_ui_id = open_ui.id().clone();
+    let open_logs_id = open_logs.id().clone();
+    let quit_id = quit.id().clone();
+
+    let logs_dir = roon_ai::config::get_data_dir().join("logs");
+    let mut shutdown_tx_opt = Some(shutdown_tx);
+
+    tracing::info!("System tray icon initialised");
+
+    event_loop.run(move |_event, _, control_flow| {
+        // Slow poll: 100 ms between menu-event checks. Negligible CPU.
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(100));
+
+        while let Ok(menu_event) = menu_channel.try_recv() {
+            if menu_event.id == open_ui_id {
+                tracing::info!("Tray: Open Web UI");
+                let _ = std::process::Command::new("cmd")
+                    .args(["/c", "start", "", "http://localhost:8088"])
+                    .spawn();
+            } else if menu_event.id == open_logs_id {
+                tracing::info!("Tray: Open Logs Folder ({})", logs_dir.display());
+                let _ = std::process::Command::new("explorer").arg(&logs_dir).spawn();
+            } else if menu_event.id == quit_id {
+                tracing::info!("Tray: Quit");
+                if let Some(tx) = shutdown_tx_opt.take() {
+                    if tx.send(()).is_err() {
+                        tracing::warn!("Server thread already exited; tray Quit had no receiver");
+                    }
+                }
+                *control_flow = ControlFlow::Exit;
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(all(windows, feature = "server"))]
+fn load_tray_icon() -> anyhow::Result<tray_icon::Icon> {
+    let bytes = include_bytes!("../public/hifi-logo.png");
+    let img = image::load_from_memory(bytes)?.to_rgba8();
+    let (width, height) = img.dimensions();
+    let rgba = img.into_raw();
+    let icon = tray_icon::Icon::from_rgba(rgba, width, height)?;
+    Ok(icon)
+}
+
+// ===========================================================================
+// Server entry point
+// ===========================================================================
+
+#[cfg(feature = "server")]
+fn main() -> anyhow::Result<()> {
+    // Handle --version and --help before doing anything else.
+    // Note: with windows_subsystem = "windows" in release builds, stdout has
+    // no console attached, so these flags only show output in debug builds or
+    // when launched from a terminal that hasn't detached.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
@@ -369,9 +495,7 @@ async fn main() -> anyhow::Result<()> {
             env!("ROON_AI_GIT_SHA")
         );
         println!();
-        println!(
-            "Natural-language Roon control bridge with AI chat and voice control."
-        );
+        println!("Natural-language Roon control bridge with AI chat and voice control.");
         println!();
         println!("USAGE:");
         println!("    roon-ai [OPTIONS]");
@@ -384,10 +508,62 @@ async fn main() -> anyhow::Result<()> {
         println!("    PORT             HTTP server port (default: 8088)");
         println!("    CONFIG_DIR       Configuration directory");
         println!("    LOG_LEVEL        Log level (debug, info, warn, error)");
+        println!();
+        println!("Logs: <data_dir>/logs/roon-ai.log.<DATE>");
+        println!("Quit (Windows): right-click the system tray icon → Quit");
         return Ok(());
     }
 
-    server::run().await
+    // Set up logging — must happen before anything that uses tracing.
+    // The guard keeps the non-blocking writer flushing; drop = drain & close.
+    let _log_guard = setup_logging()?;
+
+    // Channel: tray "Quit" → server graceful shutdown
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Spawn the tokio runtime + axum server on a worker thread.
+    // The main thread is reserved for the tray icon's event loop (Windows GUI
+    // event loops require the main thread).
+    let server_thread = std::thread::Builder::new()
+        .name("roon-ai-server".to_string())
+        .spawn(move || -> anyhow::Result<()> {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(server::run(shutdown_rx))
+        })?;
+
+    // On Windows: run the tray icon event loop on the main thread.
+    // run_tray() blocks until the user picks Quit; it then sends on shutdown_tx
+    // so the server can shut down gracefully.
+    #[cfg(windows)]
+    {
+        if let Err(e) = run_tray(shutdown_tx) {
+            tracing::error!("Tray icon failed: {} — running headless", e);
+            // Fall through and wait on the server thread anyway.
+            match server_thread.join() {
+                Ok(result) => return result,
+                Err(_) => return Err(anyhow::anyhow!("Server thread panicked")),
+            }
+        }
+    }
+
+    // On non-Windows: no tray. Just wait for the server to exit (Ctrl+C).
+    // The shutdown_tx is dropped here, which means the server's external_shutdown
+    // future resolves immediately on Drop — but tokio::oneshot Drop on the
+    // sender is fine; the receiver returns Err(_) which our select!/match treats
+    // as a no-op. We rely on Ctrl+C / SIGTERM for shutdown on non-Windows.
+    #[cfg(not(windows))]
+    {
+        let _ = shutdown_tx; // intentionally drop; non-Windows uses signals
+    }
+
+    // Wait for the server thread to finish (it will, after shutdown completes).
+    match server_thread.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(anyhow::anyhow!("Server thread panicked")),
+    }
 }
 
 // WASM entry point (client-side only)

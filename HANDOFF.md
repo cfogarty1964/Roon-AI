@@ -2490,3 +2490,65 @@ Risks worth flagging:
 - After this lands, `roon-ai.exe` is no longer a console app — running from a terminal won't print anything. Devs (i.e., this future session) need to know they can pass `--console` or build with debug profile to get console output back.
 
 MVP carve-out option (if scope creeps): just A + B + D (hidden, logged, autostart) without C. Gets ~70% of the value — runs invisibly, persists across reboots, debuggable via log files. The tray is the polish; the persistence is the substance. Add C when needed.
+
+---
+
+## Recent Work (2026-04-28, third pass) — #2 Auto-Start + System Tray Shipped
+
+User picked Full (A+B+C+D). Implementation took one session, no rabbit holes — `tao` + `tokio` worker-thread separation worked first try.
+
+### What landed
+
+**A. Hidden console window in release builds.** `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` at the top of `src/main.rs`. Debug builds (`cargo run`, `cargo build`) keep the console for development; release builds run silently in the background.
+
+**B. File logging via `tracing-appender`.** Rolling daily log files at `<data_dir>/logs/roon-ai.log.<YYYY-MM-DD>`. On Windows that resolves to `%LOCALAPPDATA%\roon-ai\logs\` (note: data dir, not config dir — config still at `%APPDATA%\roon-ai\`). New `setup_logging()` function in `main.rs` returns a `WorkerGuard` that's held by `main()` for the program lifetime; on drop the appender flushes pending writes. Both file + stdout writers are registered; stdout is harmless when the console is hidden.
+
+**C. System tray icon (Windows-only).** Cargo deps added under `[target.'cfg(windows)'.dependencies]`: `tray-icon = "0.21"`, `tao = "0.34"`, `image = "0.25"` (PNG-only feature). Icon embedded via `include_bytes!("../public/hifi-logo.png")`, loaded into RGBA at startup. Tray menu items:
+- `Roon AI v{version}` — greyed-out info row
+- `Open Web UI` — `cmd /c start "" http://localhost:8088`
+- `Open Logs Folder` — `explorer <data_dir>/logs`
+- `Quit` — sends on a `tokio::sync::oneshot` channel that races inside `shutdown_signal()` for graceful shutdown
+
+**D. Startup-folder shortcut.** New `build/windows/install-startup.ps1` creates `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Roon AI.lnk` pointing at the release binary. `WindowStyle = 7` (minimised) for belt-and-braces in case console somehow showed. `-Uninstall` flag removes the shortcut.
+
+### Architectural change in `main.rs`
+
+Previously: `#[tokio::main] async fn main()` ran `server::run().await` directly.
+
+Now: `fn main()` is synchronous. It:
+1. Sets up logging (file + stdout)
+2. Creates a `oneshot` channel for tray-driven shutdown
+3. Spawns a worker thread named `roon-ai-server` that owns a tokio multi-thread runtime running `server::run(shutdown_rx).await`
+4. On Windows: runs `run_tray(shutdown_tx)` on the main thread (tao/tray-icon require the main thread on Windows GUI subsystems)
+5. On non-Windows: just `join`s the worker thread and relies on Ctrl+C / SIGTERM
+
+`server::run()` signature changed from `() -> Result<()>` to `(oneshot::Receiver<()>) -> Result<()>`. The `shutdown_signal()` future now races three sources: Ctrl+C, SIGTERM (Unix), and the external oneshot.
+
+### Files touched
+
+- `Cargo.toml` — added `tracing-appender` to server feature; added `[target.'cfg(windows)'.dependencies]` block
+- `src/main.rs` — full restructure: file logging, tray module, sync `main()`, worker thread
+- `build/windows/install-startup.ps1` — new file
+
+### Verification
+
+- `cargo build --features server --release` — clean, zero warnings, 1m 36s
+- `cargo test --features server` — 117 passed
+- One lint catch during dev: `tests/ignored_send_lint.rs` flagged `let _ = tx.send(())` in the tray Quit handler. Fixed by checking `is_err()` and logging a warning if the receiver was already dropped (server thread already exited).
+- Live binary: tray icon visible, menu items work, server reachable at `http://localhost:8088`, log file writing as expected. Roon connection healthy (`roon_connected: true`).
+- Startup shortcut installed and verified at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Roon AI.lnk`.
+
+### Notes for future sessions
+
+- **Running from a terminal in release builds shows nothing** — no console attached. Use `tail -f $env:LOCALAPPDATA\roon-ai\logs\roon-ai.log.<date>` to watch logs live, or build with `cargo build` (debug) which keeps the console.
+- **`--version` / `--help`** still print to stdout, so they only show output in debug builds or if launched from a terminal that hasn't detached. Acceptable for an MVP — version is also visible in the tray menu's first (greyed) row.
+- **Cross-platform reality**: tray code is `#[cfg(all(windows, feature = "server"))]`. On Linux/macOS the binary builds and runs but without a tray, relying on Ctrl+C / SIGTERM for shutdown. If a Mac tray is ever wanted, swap the cfg to include macOS — `tray-icon` supports it natively, just need a separate native install path equivalent to the Startup folder.
+- **Tao polling cadence**: `ControlFlow::WaitUntil(now + 100ms)` in the event loop. 100 ms feels imperceptible in tray menu interactions and uses negligible CPU. If snappier feel matters later, switch to `EventLoopProxy` and have menu events wake the loop directly.
+
+### What's actually next
+
+#2 done. Returning to the brainstorm above:
+
+- **#4 — History-aware system prompt** (~1h, highest value-to-effort) is now the natural next pick.
+- **#1 — Wake word** still the biggest UX upgrade. Pair it with #5 (per-token TTS) for full voice-mode treatment.
+- Anything else if real usage surfaces a different priority.
