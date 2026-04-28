@@ -3075,3 +3075,55 @@ The conversational AI surface is now feature-complete for single-user voice cont
 - **#3 media keys** (~half day) — Windows SMTC bridge so the keyboard's Play/Pause/Next can drive the active zone while you're working in another window.
 - **#8 MQTT** (~half day) — Home Assistant integration for conditional automations.
 - Or settle in. Three big features just landed; real usage will surface what to do next better than guessing.
+
+---
+
+## Where We Stand — Status After v3.6.0 Push (2026-04-28 night)
+
+### Pushed
+
+Commit `7cff614` ("feat: v3.6.0 — OpenAI TTS, per-token streaming, history-aware prompt, wake-word scaffolding") and tag `v3.6.0` are on `cfogarty/v3` at https://github.com/cfogarty1964/Roon-AI. Release page: https://github.com/cfogarty1964/Roon-AI/releases/tag/v3.6.0.
+
+12 files / +1,147 / −82. Working tree is clean apart from the always-untracked local artefacts (`.claude/`, `.wm/`).
+
+### What's actually live for daily use
+
+`https://localhost:8088` (or LAN IP) — Conversational AI page now carries:
+
+- **OpenAI cloud voices** alongside browser voices in Settings → Voice. Pick e.g. *Alloy* and the AI's spoken reply uses cloud-quality TTS on every browser.
+- **Per-sentence TTS** — the spoken reply starts ~1–2 s after the user stops talking instead of ~5–8 s. Sentence-boundary chunking in JS dispatches each sentence to TTS the moment it completes; sequence-numbered playback handles out-of-order arrivals.
+- **History-aware system prompt** — last 3 played tracks fed to Claude on every request. *"play more like that"* / *"something similar"* now resolve without naming a title.
+- (Plus everything from v3.5.0: streaming replies, inline ⚡ tool pills, multi-conversation dropdown, now-playing banner with album art / transport / volume slider, voice in/out, hands-free mode, default-zone star, persistent history.)
+
+### What's gated behind Picovoice approval
+
+- **Wake word "Hey Roon AI"** — the Phase 2 scaffolding is in place (Settings toggle visible, `WAKE_WORD_INSTALL_JS` + `WAKE_WORD_LISTEN_JS` wired, detection → mic-trigger flow connected, pause-during-busy logic active). Inert until the user vendors three assets into `public/wake-word/` and pastes the Picovoice access key into Settings.
+- **User status (2026-04-28)**: Picovoice account approval pending. Once granted:
+  1. Train "Hey Roon AI" wake word for the WebAssembly platform → download `.ppn`
+  2. Drop `porcupine_web.iife.js`, `pv_porcupine.wasm`, `Hey-Roon-AI_en.ppn` into `public/wake-word/`
+  3. Paste access key into Settings → "Hands-free wake word"
+  4. Toggle on; status pill flips from "Access key required" to "Listening for 'Hey Roon AI'"
+- The Settings status pill ("Off" / "Initialising…" / "Listening…" / "Failed: …") is the diagnostic surface — whatever the engine reports back gets shown there.
+
+### Candidate list — what's done vs what's left
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Wake word ("Hey Roon AI") | 🟡 Scaffolded; awaits Picovoice approval + asset vendoring |
+| 2 | ~~Auto-start + system tray~~ | ✅ Done (v3.4 era) |
+| 3 | Media key integration (SMTC on Windows) | Not started |
+| 4 | History-aware system prompt | ✅ Done (`7cff614`, 2026-04-28) |
+| 5 | Per-token TTS streaming | ✅ Done (`7cff614`, 2026-04-28) |
+| 6 | "Similar to this" suggestion row in banner | Not started — ~1h |
+| 7 | Time-aware presets (morning/evening/dinner) | Not started |
+| 8 | MQTT bridge for Home Assistant | Not started |
+| 9 | Auto-title via Claude | Not started — ~30 min |
+| 10 | Sidebar UI for conversations | Not started |
+
+### Recommendation
+
+**Settle in.** Five major surfaces shipped today (Phase 1 voice, Phase 2 scaffolding, Phase 3 streaming TTS, #4 history awareness, plus the v3.5.0 HTTPS work that unblocked LAN mic). The next priority is best discovered by living with it.
+
+If a session opens with energy and Picovoice has approved by then, **vendoring the wake-word assets** is the natural one-hour win — flips the dormant Phase 2 scaffolding into a working hands-free interface.
+
+Otherwise, **#3 media keys** (Windows SMTC) is the highest-impact remaining item: lets you control the active zone from any application's foreground without alt-tabbing back to Roon AI.
