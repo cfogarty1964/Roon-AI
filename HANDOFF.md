@@ -2400,8 +2400,93 @@ Migrated to `%APPDATA%\roon-ai\` (config.toml at root, app-settings.json under `
 
 Intentionally preserved in dated handoff entries (this file, lines 901-1880) and in `.wm/dive_context.md`/`.ba/issues.jsonl` (historical caches). These are journal-style records of past work; rewriting them would erase the project's actual history. The `AGENTS.md:108` reference to `/Users/muness1/src/roon-ai/` is the original developer's local path on their old machine — also historical context.
 
-### Open follow-ups (not done in this pass)
+### Open follow-ups (cleared in `16ff933` later the same day)
 
-- `mcp/index.js` is a stale `package.json` `bin` entry pointing at a deleted Node.js MCP file. Pre-existed this rename. Either delete the bin entry or `git rm -r mcp/` (the dir already doesn't exist).
-- The `clippy.toml` has no remaining old refs but is worth glancing at if you're touching lints.
-- The `cloudatlas.ai` contact emails in `.claude-plugin/marketplace.json:5` and `plugin/.claude-plugin/plugin.json:7` are the *original* Cloud Atlas company contact — separate identity, left alone. Update if you want plugin metadata to reflect the current fork.
+The follow-ups originally noted here — stale `mcp/index.js` bin entry, `cloudatlas.ai` contact emails in plugin metadata, and the `library.rs::PlayItemRequest` dead-code warning — were all swept in commit `16ff933`. See the next section.
+
+---
+
+## Recent Work (2026-04-28, second pass) — Post-Rename Housekeeping + v3.0.0 Tag
+
+Three small cleanups surfaced during the rebrand verification, plus the first release tag under the new identity.
+
+### Cleanups (commit `16ff933`)
+
+- **`mcp/index.js` bin entry** — `package.json` had `"bin": { "roon-ai-mcp": "mcp/index.js" }` and `package-lock.json` mirrored it, but the `mcp/` directory was deleted in the Rust port. Dropped both `bin` and `scripts` blocks.
+- **`.claude-plugin` contact metadata** — `.claude-plugin/marketplace.json` and `plugin/.claude-plugin/plugin.json` still listed `Cloud Atlas AI` / `hello@cloudatlas.ai` as owner/author. Updated to `RooAI` / `cfogarty@221bbakerstreet.net` to match the rebrand identity. The `Cloud Atlas AI` references in HANDOFF.md historical entries and the contributor email in `build/arch/PKGBUILD.template` (a *template*, not active) are left as historical record.
+- **Dead `PlayItemRequest` struct** — `src/app/pages/library.rs:34` had a private `PlayItemRequest` struct that was never constructed (compiler warning). Leftover from a planned one-tap-play feature that didn't ship; the live struct is `pub struct PlayItemRequest` in `src/api/mod.rs`. Deleted the dead one.
+
+After this commit `cargo build --features server --release` produces **zero warnings**.
+
+### v3.0.0 tag
+
+The rebrand is a clean lineage break — fork is now its own thing, no more `unified-hifi-control` / `Muness` / `cloudatlas` artefacts in the live code, surface is feature-complete, build is silent. Annotated tag created on `16ff933` and pushed to `cfogarty/v3.0.0`:
+
+```
+git tag -a v3.0.0 -m "First release under Roon AI / RooAI / com.221b ..."
+git push cfogarty v3 v3.0.0
+```
+
+The tag slot was free — the previous v3 lineage went `v3.0.0-rc.1...rc.5` and skipped straight to `v3.1.0`, so `v3.0.0` was actually never used.
+
+GitHub release: https://github.com/cfogarty1964/Roon-AI/releases/tag/v3.0.0
+
+### Branch tracking
+
+Switched upstream tracking from `origin/v3` (the read-only upstream fork) to `cfogarty/v3` (the user's fork):
+
+```
+git branch --set-upstream-to=cfogarty/v3 v3
+```
+
+`git push` and `git pull` with no args now operate on the user's own fork. The `origin` remote is left in place for occasional `git fetch origin` to compare against the upstream.
+
+### Final state
+
+- Branch `v3` at `16ff933` on `cfogarty/v3`. Tag `v3.0.0` pushed.
+- Working tree clean (only the intentionally-untracked `.claude/scheduled_tasks.lock`, `.claude/settings.json`, plus `.claude/settings.local.json` and `.wm/dive_context.md` which are local artefacts touched by the rebrand sed sweep but excluded from commits).
+- Live binary: running, `GET /status` returns `{"service":"roon-ai","roon_connected":true,...}`. Roon Extension re-pairing confirmed visually — Roon Settings → Extensions now lists "Roon AI" by "RooAI" instead of "Muness Castle".
+- Test suite green; release build silent.
+
+### What's actually next
+
+Nothing urgent. The recommendation in the prior handoff entry still stands: settle in and use it for a few days. Real usage will surface the next priority better than guessing. The candidate list is mostly green:
+
+- **#8 — Per-token TTS streaming** is the only remaining "big" item, worth doing if voice mode becomes primary input (~2–3 h).
+- **LMS plugin removal from CI** + **release artefact-name rename in CI gates** matter only before a tagged release that runs the gated workflows. The `v3.0.0` tag did *not* trigger them (the gates are `workflow_dispatch`-only), so deferring is fine.
+- Daily-use polish (auto-title via Claude, sidebar UI) is best driven by what actually annoys you in real use.
+
+---
+
+## Brainstorm — Post-v3.0.0 Ideas (2026-04-28)
+
+After the rebrand + tag landed, surveyed the next-priority space. Recording the full list here so they don't get lost; the active pick is **#2** (see the next session's work entry once it lands).
+
+| # | Idea | Effort | Recommendation |
+|---|---|---|---|
+| 1 | Wake word ("Hey Roon") via browser (Picovoice Porcupine etc.) | ~half day | Biggest UX leap available. Difference between "voice tool" and "primary music interface." |
+| 2 | Auto-start on Windows login + system tray icon | ~half day | Currently `roon-ai.exe` runs in a terminal window — feels like a dev script. Tray + Startup folder makes it a real app. |
+| 3 | Media key integration (SMTC on Windows) | ~half day | Keyboard Play/Pause/Next keys → control active zone via Windows Media APIs. Works *while you're doing anything else*. |
+| 4 | History-aware system prompt | ~1h | Slip last 3 played tracks into the system prompt each turn so "play more like that" actually works. Highest value-to-effort ratio of all. |
+| 5 | Per-token TTS streaming | ~2–3h | Speak as the AI thinks. Only worth it after #1 — wake word makes voice native; per-token TTS makes it fast. |
+| 6 | "Similar to this" suggestion row in banner | ~1h | When a track is playing, surface 3 similar tracks/albums via a small tool call. One-tap explore. |
+| 7 | Time-aware presets (morning/evening/dinner) | ~1h | Single buttons that the AI translates into a play action with a saved seed. |
+| 8 | MQTT bridge for Home Assistant | ~half day | Was in the original project per build-file references. Expose play/pause/zone status as MQTT topics. |
+| 9 | Auto-title via Claude (existing item) | ~30 min | Replace first-message-truncation titles with a 2–4 word Claude-generated title. |
+| 10 | Sidebar UI for conversations (existing MVP is dropdown) | ~half day | ChatGPT-style. Only worth it if many conversations accumulate in real use. |
+
+### Active pick: #2 — Auto-start + tray icon
+
+User selected this first. Components:
+
+- **A. Hide console window in release builds.** `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` on `src/main.rs`. Trade-off: kills stdout, so file logging (B) is required.
+- **B. File logging via `tracing-appender`.** Rolling log files in `%APPDATA%\roon-ai\logs\` (or `ROON_AI_DATA_DIR\logs\`). Belt-and-braces if startup fails silently.
+- **C. System tray icon.** `tray-icon` crate (tauri-apps) + `tao` event loop. Menu: "Open Web UI", "Open Logs Folder", "Status: Connected/Disconnected", "Quit". Tricky bit: `tao::EventLoop` must run on the main thread, so the existing tokio runtime + axum server has to move to a spawned thread.
+- **D. Startup folder shortcut.** PowerShell installer script in `build/windows/install-startup.ps1` (or have the binary self-install on first launch with a CLI flag).
+
+Risks worth flagging:
+- tao + tokio integration on Windows is the unknown — first time the project pulls a GUI event loop into its main loop.
+- Hidden console means file logging is the only debugging surface. Need a "show me the logs folder" tray menu item from day one.
+- After this lands, `roon-ai.exe` is no longer a console app — running from a terminal won't print anything. Devs (i.e., this future session) need to know they can pass `--console` or build with debug profile to get console output back.
+
+MVP carve-out option (if scope creeps): just A + B + D (hidden, logged, autostart) without C. Gets ~70% of the value — runs invisibly, persists across reboots, debuggable via log files. The tray is the polish; the persistence is the substance. Add C when needed.
