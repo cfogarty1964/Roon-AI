@@ -2716,3 +2716,73 @@ A diagnostic improvement also landed: the server-thread closure now logs any ret
 After v3.5.0:
 - Returns to the post-v3.0.0 brainstorm. **#4 (history-aware system prompt)** is still the highest value-to-effort.
 - The mic-on-LAN unblocks any "voice from another room" use case — pair with the wake-word work (#1) for the full hands-free vision.
+
+---
+
+## Where We Stand — Status After v3.5.0 (2026-04-28 evening)
+
+### Today's shipping arc
+
+Three tags in one session, each a clean step on top of the previous:
+
+| Tag | Commit | What |
+|---|---|---|
+| **v3.4.0** | `4ba4697` | Album-art thumbnail clickable → opens full-size in a new browser tab. Local builds finally report a meaningful version number (was `0.0.0`). |
+| **v3.4.1** | `311cd37` | 📻 Start Radio button replaces the heart-button-for-love attempt (Love isn't exposed by the rust-roon-api crate; we tried and documented). Vendored the rust-roon-api fork with a small `hierarchy` field patch on `BrowseOpts`/`LoadOpts` — harmless default of `"browse"`, useful for future `albums`/`tracks`/`search` work. Side benefit: `post_json` client helper now extracts the server's `error` field on non-2xx responses instead of failing with a misleading "missing field" message. |
+| **v3.5.0** | `6df6910` | HTTPS via self-signed cert on the same port (8088). Mic and other powerful APIs now work from any PC on the LAN, not just localhost. SAN list auto-detects every non-loopback IP plus localhost/hostname/`hostname.local`. Cert persisted at `<data_dir>/certs/`, generated once, reused forever. |
+
+23 commits ahead of upstream `origin/v3`. All three tags pushed to `cfogarty/v3`. Tracking on `cfogarty/v3`.
+
+### Current state
+
+- **Branch `v3`** at `6df6910` on `cfogarty/v3`. Working tree clean (only the intentionally-excluded `.claude/` and `.wm/` local files).
+- **Binary**: `roon-ai.exe v3.5.0`. Hidden console in release; rolling daily logs at `%LOCALAPPDATA%\roon-ai\logs\`.
+- **TLS cert**: `%LOCALAPPDATA%\roon-ai\certs\roon-ai.{cert,key}.pem` — long-lived self-signed, auto-detected SAN.
+- **Tray icon** (Windows): "Open Web UI" → `https://localhost:8088`. "Open Logs Folder", "Quit" all working.
+- **Auto-start**: Startup folder shortcut installed earlier, points at the release binary.
+- **Roon adapter**: connected. UPnP disabled.
+- **Test suite**: 117 passing, 0 failed. (Full run was at v3.4.0; HTTPS work didn't touch test surface.)
+
+### Web UI surface
+
+`/` Conversational AI · `/library` · `/settings`
+
+Banner row in the now-playing card (Roon zones only):
+- 40×40 album art — *click to open full-size in new tab*
+- Track/artist/album info
+- ⏮ ⏯/⏸ ⏭ transport
+- 📻 Start Radio
+- Volume slider (Roon zones with VolumeControl)
+- Track-action flash banner above the row for radio start/error feedback
+
+### Brainstorm — what's left from the post-v3.0.0 list
+
+| # | Idea | Effort | Status |
+|---|---|---|---|
+| 1 | Wake word ("Hey Roon") via browser | ~half day | Not started — biggest UX leap available |
+| 2 | ~~Auto-start + system tray~~ | — | ✅ shipped earlier today |
+| 3 | Media key integration (SMTC) | ~half day | Not started |
+| 4 | History-aware system prompt | ~1h | Not started — **highest value-to-effort** |
+| 5 | Per-token TTS streaming | ~2-3h | Not started — pair with #1 |
+| 6 | "Similar to this" suggestion row in banner | ~1h | Not started |
+| 7 | Time-aware presets (morning/evening/dinner) | ~1h | Not started |
+| 8 | MQTT bridge for Home Assistant | ~half day | Not started |
+| 9 | Auto-title via Claude | ~30 min | Not started |
+| 10 | Sidebar UI for conversations | ~half day | Not started |
+
+Plus the new follow-ups from today:
+
+- **Track-love feature**: would require reverse-engineering Roon's WebSocket protocol to find the service that exposes Love (4-8h speculation; documented in pass #5)
+- **mkcert local CA**: replace the self-signed cert with one trusted by browsers, eliminating the cert warning. Half-day; nice polish if cert warnings become annoying when adding new devices.
+- **Upstream the rust-roon-api hierarchy patch** to `open-horizon-labs/rust-roon-api` and `theappgineer/rust-roon-api`. Would let us swap `Cargo.toml` back from the vendored path dep to the git dep.
+
+### Recommendation
+
+The day's three tags are a complete arc — UI polish (v3.4.0), pragmatic feature pivot after a constraint discovery (v3.4.1), and the secure-context unblock for LAN voice (v3.5.0). All three are validated end-to-end against a live Roon Core.
+
+**Real next moves:**
+- **Settle in.** Use it for a few days. The mic-on-LAN unblock makes "voice from the kitchen" possible for the first time — that's a different mode of usage than has been tested.
+- **#4 (history-aware system prompt, ~1h)** if a session opens with energy for the highest value-to-effort win.
+- **#1 (wake word)** if voice keeps becoming primary input — pair with #5 for the full treatment.
+
+Or, as before — the project ships a coherent feature set under a coherent name on a sensible secure foundation. The next priority is best discovered by living with it.
