@@ -480,6 +480,51 @@ fn do_transport(zone_id: String, action: &'static str) {
     });
 }
 
+/// Response shape from POST /roon/play (also covers Start Radio via
+/// `action: "radio"`). Server returns `{ message: "Start Radio: <title>" }`.
+#[derive(serde::Deserialize)]
+struct PlayActionResponse {
+    #[allow(dead_code)] // returned by server for diagnostics; we ignore on success
+    message: String,
+}
+
+/// Start Roon Radio seeded by the currently-playing track. Reuses the
+/// existing /roon/play endpoint with action="radio", which Roon translates
+/// to the "Start Radio" item in every track action menu. The flash signal
+/// carries human-readable feedback for the UI to display.
+fn do_start_radio(
+    zone_id: String,
+    title: String,
+    artist: Option<String>,
+    mut flash: Signal<Option<String>>,
+) {
+    if zone_id.is_empty() || title.is_empty() {
+        return;
+    }
+    // Search query: title plus artist when present, helps Roon disambiguate.
+    let query = match &artist {
+        Some(a) if !a.is_empty() => format!("{} {}", title, a),
+        _ => title.clone(),
+    };
+    flash.set(Some(format!("📻 Starting radio from '{}'…", title)));
+    spawn(async move {
+        let body = serde_json::json!({
+            "zone_id": zone_id,
+            "query": query,
+            "action": "radio",
+            "source": "library",
+        });
+        match crate::app::api::post_json::<_, PlayActionResponse>("/roon/play", &body).await {
+            Ok(_) => {
+                flash.set(Some(format!("📻 Radio started from '{}'", title)));
+            }
+            Err(e) => {
+                flash.set(Some(format!("Couldn't start radio: {}", e)));
+            }
+        }
+    });
+}
+
 /// Set absolute volume on a Roon zone via `POST /roon/volume`. Only used by
 /// the banner slider; UPnP zones don't expose an absolute-set endpoint and
 /// hide the slider entirely. Errors are logged but not surfaced — SSE will
@@ -657,6 +702,12 @@ pub fn ConversationalAi() -> Element {
     // initial save-on-mount that would otherwise overwrite stored data with
     // an empty list before the load has a chance to populate it.
     let mut hydrated = use_signal(|| false);
+
+    // Transient flash message for one-shot track actions in the now-playing
+    // banner (currently used by Start Radio; designed to be reusable for
+    // future single-shot actions). Stays visible until the next action or
+    // until the user dismisses with the × button on the flash itself.
+    let track_action_flash = use_signal(|| Option::<String>::None);
 
     // Speech state
     let mut speak_enabled = use_signal(|| false);
@@ -1064,6 +1115,30 @@ pub fn ConversationalAi() -> Element {
                 let vc = full_zone.as_ref().and_then(|z| z.volume_control.clone());
                 let is_roon = zid.starts_with("roon:");
                 rsx! {
+                    // Track-action flash (e.g. Start Radio): persists until
+                    // the next action or manual ×.
+                    {
+                        let flash_msg = track_action_flash.read().clone();
+                        let mut flash = track_action_flash;
+                        if let Some(msg) = flash_msg {
+                            rsx! {
+                                div {
+                                    class: "mb-2 flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-sm text-primary",
+                                    role: "status",
+                                    "aria-live": "polite",
+                                    span { class: "truncate", "{msg}" }
+                                    button {
+                                        class: "text-primary/70 hover:text-primary leading-none px-1",
+                                        "aria-label": "Dismiss",
+                                        onclick: move |_| flash.set(None),
+                                        "×"
+                                    }
+                                }
+                            }
+                        } else {
+                            rsx! {}
+                        }
+                    }
                     if let Some(t) = track {
                         div { class: "mb-4 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm",
                             // Top row: art, label, track text, transport buttons.
@@ -1126,7 +1201,12 @@ pub fn ConversationalAi() -> Element {
                                     let zid_prev = zid.clone();
                                     let zid_play = zid.clone();
                                     let zid_next = zid.clone();
+                                    let zid_radio = zid.clone();
+                                    let radio_title = t.title.clone().unwrap_or_default();
+                                    let radio_artist = t.artist.clone();
                                     let is_playing = t.is_playing;
+                                    let flash = track_action_flash;
+                                    let radio_disabled = !is_roon || radio_title.is_empty();
                                     rsx! {
                                         div { class: "flex items-center gap-1",
                                             button {
@@ -1149,6 +1229,23 @@ pub fn ConversationalAi() -> Element {
                                                 title: "Next",
                                                 onclick: move |_| do_transport(zid_next.clone(), "next"),
                                                 "⏭"
+                                            }
+                                            button {
+                                                class: if radio_disabled {
+                                                    "px-2 py-1 rounded-md text-base leading-none text-muted-foreground/40 cursor-not-allowed"
+                                                } else {
+                                                    "px-2 py-1 rounded-md hover:bg-primary/10 text-base leading-none"
+                                                },
+                                                "aria-label": "Start Roon Radio from this track",
+                                                title: if radio_disabled { "Start Radio (Roon zones only)" } else { "Start Roon Radio seeded by this track" },
+                                                disabled: radio_disabled,
+                                                onclick: move |_| do_start_radio(
+                                                    zid_radio.clone(),
+                                                    radio_title.clone(),
+                                                    radio_artist.clone(),
+                                                    flash,
+                                                ),
+                                                "📻"
                                             }
                                         }
                                     }

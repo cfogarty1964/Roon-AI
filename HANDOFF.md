@@ -2591,3 +2591,58 @@ Build verification:
 After v3.4.0 ships:
 - **#4 — History-aware system prompt** is still the highest value-to-effort. Slip the last 3 played tracks into the agent's system prompt so "play more like that" works.
 - **#1 — Wake word** remains the biggest UX leap available.
+
+---
+
+## Recent Work (2026-04-28, fifth pass) — Love attempt → 📻 Start Radio button + vendored rust-roon-api
+
+### What we set out to do
+
+Add a heart button to the now-playing banner that toggles a track's loved state in Roon (the user's "Roon love"), pushing the change back to Roon's database via the API.
+
+### What we discovered
+
+**Roon's Love is not exposed by any service in the rust-roon-api crate.** Verified empirically across three navigation paths:
+
+1. **Standard `browse` hierarchy → Library → Search → track action menu** → returned `["Play Now", "Add Next", "Queue", "Start Radio"]`. No Love.
+2. **`now_playing` hierarchy** → Roon responded `<- COMPLETE 19 InvalidHierarchy`. The hierarchy name we hoped existed doesn't.
+3. **`albums` hierarchy → album → track action menu** (library context) → same 4-action menu. No Love.
+
+The 4-action menu is consistent across paths because that IS the action menu the rust-roon-api crate's Browse service exposes. Roon's official UI surfaces Love via a different mechanism — likely an undocumented metadata/library service that this crate doesn't implement, OR a non-public API method on the Browse/Transport services. Implementing it would require reverse-engineering Roon's WebSocket protocol with a proxy capture, which is a significantly larger investment than the original estimate.
+
+### What we shipped instead (commit `<v3.4.1>`)
+
+**📻 Start Radio button** in the now-playing banner, in the position the heart was. Click → POSTs to existing `/roon/play` endpoint with `action: "radio"`. Roon's "Start Radio" *is* in every track action menu (we saw it in every diagnostic), so this works without any API surface drama. Smoke-tested via curl: `{"message":"Start Radio: Foreigner"}`.
+
+The button is greyed for non-Roon zones (UPnP doesn't have Start Radio). The flash banner persists "📻 Radio started from 'Title'" until the next action or × dismiss.
+
+### What we kept
+
+**Vendored `rust-roon-api` at `vendor/rust-roon-api/`** with a small patch adding `pub hierarchy: Option<String>` to `BrowseOpts` and `LoadOpts`, plus the corresponding override logic in `browse()` / `load()`. The patch is harmless (defaults to `"browse"` when None, preserving all existing call-site behaviour) and lets future work use any of Roon's hierarchies directly: `albums`, `tracks`, `search`, `internet_radio`, `playlists`, etc.
+
+`Cargo.toml` repointed from `git = "https://github.com/open-horizon-labs/rust-roon-api.git"` to `path = "vendor/rust-roon-api"`. To return to the upstream remote, the `hierarchy` patch will need to be upstreamed first.
+
+### What we reverted
+
+- `love_track` method in `src/adapters/roon.rs` (~250 lines)
+- `LoveResult` struct
+- `LoveTrackRequest` + `roon_love_handler` in `src/api/mod.rs`
+- `/roon/love` route in `src/main.rs`
+- `do_love`, `LoveResponse` in client (replaced with `do_start_radio`, `PlayActionResponse`)
+- Heart button (replaced with 📻)
+
+### Future Love attempt
+
+If a future session wants to revisit Love, the path is **protocol reverse-engineering**:
+1. Run a WebSocket proxy (e.g., `mitmproxy` or `wireshark` with WebSocket dissection) between Roon's official client and your Roon Core
+2. Click the heart on a track in Roon's UI
+3. Capture the request/response
+4. The captured service name + method + payload is what to implement
+
+The vendored rust-roon-api is the natural place to add a new service — copy the pattern from `transport.rs` or `browse.rs`. Could potentially be upstreamed if the maintainer is interested.
+
+Estimated effort given the unknowns: 4-8 hours.
+
+### Beneficial side effect
+
+`src/app/api.rs::post_json` now properly extracts the server's `{ "error": "..." }` body on non-2xx responses, instead of failing with the misleading "missing field" deserialise error. Caught while debugging the love feature; useful for any future endpoint that returns structured errors.

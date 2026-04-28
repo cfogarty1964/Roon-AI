@@ -212,9 +212,24 @@ pub async fn post_json<T: Serialize, R: for<'de> Deserialize<'de>>(
 
     let resp: Response = resp_value.dyn_into().map_err(|_| "Not a Response")?;
 
+    let status_ok = resp.ok();
+    let status = resp.status();
+
     let json = JsFuture::from(resp.json().map_err(|e| format!("{:?}", e))?)
         .await
         .map_err(|e| format!("{:?}", e))?;
+
+    // On non-2xx, surface the server's `{ error }` message instead of failing
+    // the deserialise-as-R step with a misleading "missing field" error.
+    if !status_ok {
+        if let Ok(val) = serde_wasm_bindgen::from_value::<serde_json::Value>(json) {
+            if let Some(msg) = val.get("error").and_then(|v| v.as_str()) {
+                return Err(msg.to_string());
+            }
+            return Err(format!("HTTP {}: {}", status, val));
+        }
+        return Err(format!("HTTP {}", status));
+    }
 
     serde_wasm_bindgen::from_value(json).map_err(|e| format!("{:?}", e))
 }
