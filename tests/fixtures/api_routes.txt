@@ -33,6 +33,7 @@ GET /zones
 POST /api/ai/chat
 POST /api/ai/chat/stream
 POST /api/settings
+POST /api/tts
 POST /mcp
 POST /roon/browse
 POST /roon/browse/load

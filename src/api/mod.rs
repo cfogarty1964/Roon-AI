@@ -41,6 +41,8 @@ pub struct AppState {
     pub sse_connections: Arc<AtomicUsize>,
     /// Anthropic API key for AI chat (None = feature disabled)
     pub anthropic_api_key: Option<String>,
+    /// OpenAI API key for cloud TTS (None = TTS endpoint returns 503)
+    pub openai_api_key: Option<String>,
 }
 
 impl AppState {
@@ -65,11 +67,17 @@ impl AppState {
             shutdown,
             sse_connections: Arc::new(AtomicUsize::new(0)),
             anthropic_api_key: None,
+            openai_api_key: None,
         }
     }
 
     pub fn with_anthropic_key(mut self, key: Option<String>) -> Self {
         self.anthropic_api_key = key;
+        self
+    }
+
+    pub fn with_openai_key(mut self, key: Option<String>) -> Self {
+        self.openai_api_key = key;
         self
     }
 
@@ -1017,5 +1025,131 @@ pub async fn ai_chat_stream_handler(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+// ============================================================================
+// TTS handler — proxies to OpenAI's /v1/audio/speech for cloud TTS voices
+// ============================================================================
+
+#[derive(Deserialize)]
+pub struct TtsRequest {
+    pub text: String,
+    pub voice: String,
+}
+
+const OPENAI_TTS_VOICES: &[&str] = &[
+    "alloy", "echo", "fable", "onyx", "nova", "shimmer",
+];
+
+// OpenAI's TTS endpoint accepts up to 4096 chars per request. Cap below that
+// so we never get a 400 back when the user holds a long conversation and the
+// reply is unusually long. Truncation is fine — the spoken reply just stops
+// where the cap hits, and the rendered HTML in the chat is unaffected.
+const OPENAI_TTS_MAX_CHARS: usize = 4000;
+
+/// POST /api/tts — body `{ text, voice }`, returns audio/mpeg (MP3) bytes.
+/// Uses model `gpt-4o-mini-tts` (cheap + fast, ~$0.60 / 1M chars).
+/// Returns 503 if no OpenAI key is configured, 400 on bad input, 502 if
+/// OpenAI rejects the request.
+pub async fn tts_handler(
+    State(state): State<AppState>,
+    Json(req): Json<TtsRequest>,
+) -> axum::response::Response {
+    use axum::body::Body;
+    use axum::response::Response;
+
+    fn json_err(status: StatusCode, msg: &str) -> axum::response::Response {
+        Response::builder()
+            .status(status)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "error": msg }).to_string(),
+            ))
+            .unwrap_or_else(|_| Response::new(Body::empty()))
+    }
+
+    let api_key = match state.openai_api_key.as_ref() {
+        Some(k) => k.clone(),
+        None => {
+            return json_err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "OpenAI API key not configured",
+            );
+        }
+    };
+
+    let mut text = req.text.trim().to_string();
+    if text.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "text is required");
+    }
+    if text.chars().count() > OPENAI_TTS_MAX_CHARS {
+        // char-boundary safe truncation
+        let cutoff = text
+            .char_indices()
+            .nth(OPENAI_TTS_MAX_CHARS)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len());
+        text.truncate(cutoff);
+    }
+
+    if !OPENAI_TTS_VOICES.contains(&req.voice.as_str()) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "voice must be one of: alloy, echo, fable, onyx, nova, shimmer",
+        );
+    }
+
+    let body = serde_json::json!({
+        "model": "gpt-4o-mini-tts",
+        "input": text,
+        "voice": req.voice,
+        "response_format": "mp3",
+    });
+
+    let client = reqwest::Client::new();
+    let resp = match client
+        .post("https://api.openai.com/v1/audio/speech")
+        .bearer_auth(&api_key)
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("TTS upstream error: {}", e);
+            return json_err(StatusCode::BAD_GATEWAY, "failed to reach OpenAI");
+        }
+    };
+
+    let status = resp.status();
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("TTS body read error: {}", e);
+            return json_err(StatusCode::BAD_GATEWAY, "failed to read OpenAI response");
+        }
+    };
+
+    if !status.is_success() {
+        // Forward the upstream status with the upstream body so the client can
+        // surface the real reason (e.g. 401 invalid key, 429 rate limited).
+        let upstream_status = StatusCode::from_u16(status.as_u16())
+            .unwrap_or(StatusCode::BAD_GATEWAY);
+        let body_text = String::from_utf8_lossy(&bytes).into_owned();
+        tracing::warn!("TTS upstream {} body: {}", upstream_status, body_text);
+        return Response::builder()
+            .status(upstream_status)
+            .header("content-type", "application/json")
+            .body(Body::from(body_text))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "audio/mpeg")
+        .header("cache-control", "no-store")
+        .body(Body::from(bytes.to_vec()))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 

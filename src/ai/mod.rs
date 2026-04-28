@@ -29,6 +29,21 @@ pub struct AiChatRequest {
     /// having to type the title.
     #[serde(default)]
     pub current_track: Option<CurrentTrack>,
+    /// Tracks the user has recently been listening to (most recent first,
+    /// capped at ~3 by the client). Lets Claude resolve follow-ups like
+    /// "play more like that" or "what was that one I had on?" without
+    /// requiring the title in the user's message.
+    #[serde(default)]
+    pub recent_tracks: Vec<RecentTrack>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecentTrack {
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,7 +230,11 @@ fn tools() -> Vec<Value> {
 // System prompt
 // ============================================================================
 
-fn system_prompt(preferred_zone: Option<&str>, current_track: Option<&CurrentTrack>) -> String {
+fn system_prompt(
+    preferred_zone: Option<&str>,
+    current_track: Option<&CurrentTrack>,
+    recent_tracks: &[RecentTrack],
+) -> String {
     let zone_hint = preferred_zone
         .map(|z| format!("\n\nThe user has pre-selected zone: `{}`. Use this zone unless they say otherwise.", z))
         .unwrap_or_default();
@@ -238,6 +257,35 @@ fn system_prompt(preferred_zone: Option<&str>, current_track: Option<&CurrentTra
         })
         .unwrap_or_default();
 
+    let history_hint = if recent_tracks.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::from(
+            "\n\nThe user has recently been listening to (most recent first):",
+        );
+        for t in recent_tracks {
+            s.push_str("\n- '");
+            s.push_str(&t.title);
+            s.push('\'');
+            if let Some(a) = t.artist.as_deref().filter(|a| !a.is_empty()) {
+                s.push_str(" by ");
+                s.push_str(a);
+            }
+            if let Some(al) = t.album.as_deref().filter(|a| !a.is_empty()) {
+                s.push_str(" (from '");
+                s.push_str(al);
+                s.push_str("')");
+            }
+        }
+        s.push_str(
+            "\nWhen the user says 'play more like that', 'something similar', 'that thing I was playing', etc. \
+without naming a specific track, treat this list as the implied seed. \
+Prefer the most recent track unless context indicates otherwise. \
+For 'similar to' requests on a Roon zone, use action='radio' to seed Roon Radio from the relevant track.",
+        );
+        s
+    };
+
     format!(
         "You are an AI assistant controlling a hi-fi audio system. \
 You have access to tools that let you discover playback zones and control music playback. \
@@ -253,9 +301,10 @@ on its own lines, after a blank line:\n\n\
 [{{\"title\": \"Piece or track title\", \"artist\": \"Composer or performer\", \"album\": \"Album (optional)\"}}]\n\
 <<<END_SUGGESTIONS>>>\n\n\
 Rules for the block: valid JSON array only; include between 1 and 10 items; omit the block entirely if you are not recommending specific pieces. \
-Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}{}",
+Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}{}{}",
         zone_hint,
-        track_hint
+        track_hint,
+        history_hint
     )
 }
 
@@ -621,7 +670,7 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
         .ok_or_else(|| anyhow!("ANTHROPIC_API_KEY is not set. Set the env var or add api_key to [ai] in config.toml."))?;
 
     let client = AnthropicClient::new(api_key);
-    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref());
+    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref(), &request.recent_tracks);
 
     let mut messages: Vec<Message> = Vec::with_capacity(request.history.len() + 1);
     for turn in &request.history {
@@ -765,7 +814,7 @@ async fn run_agent_streaming_inner(
         })?;
 
     let client = AnthropicClient::new(api_key);
-    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref());
+    let system = system_prompt(request.zone_id.as_deref(), request.current_track.as_ref(), &request.recent_tracks);
 
     let mut messages: Vec<Message> = Vec::with_capacity(request.history.len() + 1);
     for turn in &request.history {

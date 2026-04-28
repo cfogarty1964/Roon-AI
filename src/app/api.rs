@@ -295,6 +295,20 @@ pub struct AiChatRequest {
     /// Claude can resolve context-dependent commands like "skip this".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_track: Option<CurrentTrack>,
+    /// Tracks the user has recently been listening to (most recent first,
+    /// capped at 3). Sent so Claude can resolve "play more like that" without
+    /// the user naming a specific title.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tracks: Vec<RecentTrack>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RecentTrack {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

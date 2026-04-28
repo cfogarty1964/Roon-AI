@@ -13,12 +13,14 @@ pub mod pages;
 pub mod sse;
 pub mod theme;
 pub mod voice_context;
+pub mod wake_word_context;
 
 use default_zone::use_default_zone_provider;
 use pages::{ConversationalAi, Library, Settings};
 use sse::use_sse_provider;
 use theme::use_theme_provider;
 use voice_context::use_voice_provider;
+use wake_word_context::use_wake_word_provider;
 
 /// Root app component with routing
 #[component]
@@ -34,6 +36,10 @@ pub fn App() -> Element {
 
     // Initialize voice-picker context at app root (persisted to localStorage)
     use_voice_provider();
+
+    // Initialize wake-word context at app root (off until user supplies
+    // Picovoice access key + .ppn model — see wake_word_context.rs setup notes)
+    use_wake_word_provider();
 
     rsx! {
         Router::<Route> {}

@@ -2966,3 +2966,112 @@ Worst case for all three: ~2 days of work across 2-3 sessions. Best case (if all
 - **TTS model**: `gpt-4o-mini-tts` ($0.60/1M chars, fast) vs `tts-1-hd` ($30/1M chars, slightly nicer). Recommendation: start with mini-tts; upgrade if quality is the issue.
 - **Wake-word phrase**: Picovoice training accepts any phrase; longer = more accurate. "Hey Roon AI" is recommended. Alternatives: "Hey RooAI", "OK Roon" (worse — short).
 - **Picovoice tier**: free covers personal use up to 3 users. If the household grows, $200-300/yr Standard tier handles unlimited users. Start free.
+
+---
+
+## Recent Work (2026-04-28, seventh pass) — v3.6.0: Phases 1–3 + history-aware prompt
+
+Three planned items shipped in one session: better voices (Phase 1), wake-word scaffolding (Phase 2), per-token TTS streaming (Phase 3), and the unrelated "history-aware system prompt" win (#4 from the brainstorm).
+
+### Phase 1 — Better voices (OpenAI TTS)
+
+Settings → Voice picker now offers six OpenAI voices (Alloy, Echo, Fable, Onyx, Nova, Shimmer) under an "OpenAI cloud" optgroup alongside the browser voices. Stored as `openai:<id>`; the JS dispatcher branches on the prefix.
+
+- New `POST /api/tts` endpoint in [src/api/mod.rs](src/api/mod.rs) — proxies to `https://api.openai.com/v1/audio/speech`, model `gpt-4o-mini-tts`, mp3 response. 503 if no key, 400 on bad input, upstream status forwarded on OpenAI errors. Caps input at 4000 chars (under OpenAI's 4096 limit).
+- New `[ai] openai_api_key` config + `OPENAI_API_KEY` env-var support in [src/config/mod.rs](src/config/mod.rs).
+- Startup log gains `Cloud TTS enabled (OpenAI API key found)` / `Cloud TTS disabled (set OPENAI_API_KEY to enable)`.
+
+Cost: ~$0.005 per typical AI reply (~300 chars). Negligible for normal use.
+
+### Phase 3 — Per-token TTS streaming
+
+The spoken reply now starts mid-stream instead of waiting for the full text. Sentence-boundary detection runs in JS (`STREAM_CONSUMER_JS`) — each completed sentence is dispatched to a TTS queue immediately. For OpenAI voices, fetches fire in parallel and play in sequence number order; for browser voices, the native speechSynthesis queue handles ordering. Reduces "user finishes speaking" → "AI starts speaking" from ~5–8 s to ~1–2 s.
+
+- `RoonSpeech` JS module gained streaming session API: `startTtsSession(voice)`, `queueTtsChunk(text)`, `closeTtsSession()`, plus revamped `cancelSpeech()` that tears down both fetch + audio + utterance state cleanly.
+- New `SpeechComplete` variant on `AgentEvent` — sent by JS after `Done` AND the TTS queue drains. Rust loop now waits for `SpeechComplete` (not `Done`) before kicking off continuous-mode listening, so the mic doesn't open over still-playing speech.
+- Sentence regex: `/[.!?](?:["')\]]+)?\s+(?=[A-Z"'(À-ɏ]|$)/`. Tolerates abbreviations imperfectly (false split on "Mr. Smith") but the audio gap is barely perceptible.
+- Suggestions sentinel suppression: TTS dispatch stops once the `<<<SUGGESTIONS>>>` block starts in the stream, so the user never hears the JSON.
+- Force-flush after 220 chars without a sentence boundary to bound latency.
+
+### #4 — History-aware system prompt
+
+The agent's system prompt now includes the last 3 played tracks (most recent first) on every request. Resolves "play more like that" / "what was that one I had on" without requiring the title in the user's message.
+
+- New `recent_tracks: Vec<RecentTrack>` field on `AiChatRequest` (server + client mirror).
+- Client maintains a 3-entry ring buffer in [src/app/pages/conversational_ai.rs](src/app/pages/conversational_ai.rs) — populated when `current_track` transitions to a new title, the previous track is pushed onto the buffer.
+- System prompt construction (`src/ai/mod.rs::system_prompt`) gained a `history_hint` block that lists recently-played tracks and instructs Claude to use them as the implied seed for "similar" / "more like that" requests.
+
+### Phase 2 — Wake-word scaffolding ("Hey Roon AI")
+
+Picovoice Porcupine integration is in place but **dormant** until the user vendors the engine assets — see setup notes in [src/app/wake_word_context.rs](src/app/wake_word_context.rs).
+
+When activated: saying "Hey Roon AI" triggers the same code path as a manual mic click. Pauses while a request is in flight or the mic is open (so the AI's spoken reply doesn't false-trigger).
+
+User prereqs (one-time):
+1. Sign up at [console.picovoice.ai](https://console.picovoice.ai/)
+2. Train a "Hey Roon AI" wake-word model on the WebAssembly platform; download `.ppn`
+3. Drop into `public/wake-word/`:
+   - `porcupine_web.iife.js` (IIFE bundle from a `@picovoice/porcupine-web` release)
+   - `pv_porcupine.wasm` (engine binary)
+   - `Hey-Roon-AI_en.ppn` (trained keyword)
+4. Paste access key into Settings → "Hands-free wake word"
+
+Until those four are in place, `init()` returns false and the toggle stays inert with a friendly "Init failed (assets or key missing)" status. No errors on the page, no false starts.
+
+- New shared context [src/app/wake_word_context.rs](src/app/wake_word_context.rs) — `enabled`, `access_key`, `detected_count`, `status` signals; localStorage-persisted.
+- New JS modules in `conversational_ai.rs`: `WAKE_WORD_INSTALL_JS` (idempotent `window.RoonWake` installer), `WAKE_WORD_LISTEN_JS` (long-running eval that bridges Porcupine detection events into Rust signals).
+- Settings page gained "Hands-free wake word" section with toggle + password-style key input + status display.
+- Detection flow: Porcupine fires callback → JS `dioxus.send({kind: "detected"})` → Rust signal increment → `use_effect` triggers `start_listening_task` (same as mic-click). Pause/resume on busy/idle transitions wired via `use_effect` watching `loading || listening`.
+
+### Files created / modified
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Version bump 3.5.0 → 3.6.0 |
+| `src/ai/mod.rs` | New `RecentTrack` deserialisable; `recent_tracks` on `AiChatRequest`; `system_prompt` extended with history hint |
+| `src/api/mod.rs` | `AppState.openai_api_key` + builder; `tts_handler` with input cap, voice validation, upstream error pass-through |
+| `src/app/api.rs` | Mirrored `RecentTrack` + `recent_tracks` field on shared `AiChatRequest` |
+| `src/app/mod.rs` | Registered `wake_word_context` provider |
+| `src/app/pages/conversational_ai.rs` | Recent-tracks ring buffer; reworked `SPEECH_INSTALL_JS` (queueable TTS session); reworked `STREAM_CONSUMER_JS` (sentence chunking + per-sentence TTS dispatch); new `WAKE_WORD_INSTALL_JS` + `WAKE_WORD_LISTEN_JS`; new `SpeechComplete` `AgentEvent` variant; receive loop refactored to wait for `SpeechComplete`; wake-word init/detect/pause effects |
+| `src/app/pages/settings.rs` | OpenAI optgroup in voice picker; new "Hands-free wake word" section |
+| `src/app/wake_word_context.rs` | **New** — shared wake-word state + setup walkthrough doc-comment |
+| `src/config/mod.rs` | `AiConfig.openai_api_key` + `resolve_openai_api_key()` resolver |
+| `src/main.rs` | Resolves OpenAI key at startup; logs Cloud TTS status; threads into `AppState`; registers `POST /api/tts` |
+| `tests/fixtures/api_routes.txt` | Added `POST /api/tts` to keep the route contract test green |
+
+### Verification
+
+- `cargo check --features server` — clean
+- `cargo check --target wasm32-unknown-unknown --features web --no-default-features` — clean
+- `cargo test --features server` — 117 passed, 0 failed
+- Tailwind 261 ms, dx build 175 s, cargo release 2:28 — clean
+- Live binary: `GET /status` returns `version=3.6.0`; log confirms `AI chat enabled` + `Cloud TTS enabled`
+- TTS endpoint smoke-tested: `POST /api/tts` with `{text, voice:"alloy"}` returns valid MPEG layer III mp3 (~58 KB for a short sentence, 24 kHz mono 128 kbps)
+
+### Behaviour changes for users
+
+- **Pick a voice once on Settings** and it sticks across reloads. OpenAI cloud voices need an `openai_api_key` in `config.toml`; browser voices work out of the box.
+- **Spoken reply starts ~1–2 s after the user stops talking** instead of ~5–8 s. Hands-free mode now feels conversational.
+- **"Play more like that" works** without naming a track — the agent sees the last 3 tracks the user heard.
+- **Wake-word toggle is visible** but stays inert until the user does the Picovoice setup. Status pill on Settings tells them why.
+
+### What's actually next
+
+The voice-mode candidate list (Phases 1–3 + #4) is now done. Remaining brainstorm items:
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Wake word | ✅ Scaffolding shipped; awaits user Picovoice setup |
+| 3 | Media keys (SMTC on Windows) | Not started |
+| 4 | History-aware system prompt | ✅ Done |
+| 5 | Per-token TTS streaming | ✅ Done |
+| 6 | "Similar to this" suggestion row in banner | Not started — could be a 1-hour follow-up |
+| 7 | Time-aware presets (morning/evening/dinner) | Not started |
+| 8 | MQTT bridge for Home Assistant | Not started |
+
+The conversational AI surface is now feature-complete for single-user voice control. Realistic next steps if there's another session:
+
+- **Vendor the Porcupine assets + train the wake word** to actually activate Phase 2 in real use.
+- **#3 media keys** (~half day) — Windows SMTC bridge so the keyboard's Play/Pause/Next can drive the active zone while you're working in another window.
+- **#8 MQTT** (~half day) — Home Assistant integration for conditional automations.
+- Or settle in. Three big features just landed; real usage will surface what to do next better than guessing.

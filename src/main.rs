@@ -143,6 +143,16 @@ mod server {
             tracing::info!("AI chat disabled (set ANTHROPIC_API_KEY to enable)");
         }
 
+        // Resolve OpenAI API key — used by the cloud TTS proxy (/api/tts).
+        // Optional; absence only disables the OpenAI voice option in the
+        // voice picker, browser TTS still works.
+        let openai_key = config::resolve_openai_api_key(&config);
+        if openai_key.is_some() {
+            tracing::info!("Cloud TTS enabled (OpenAI API key found)");
+        } else {
+            tracing::info!("Cloud TTS disabled (set OPENAI_API_KEY to enable)");
+        }
+
         // Build application state (clone Arcs so we can access adapters for shutdown)
         let state = api::AppState::new(
             roon,
@@ -154,7 +164,8 @@ mod server {
             Instant::now(),
             shutdown_token.clone(),
         )
-        .with_anthropic_key(anthropic_key);
+        .with_anthropic_key(anthropic_key)
+        .with_openai_key(openai_key);
 
         // Clone state for shutdown diagnostics
         let state_for_shutdown = state.clone();
@@ -194,6 +205,8 @@ mod server {
             // AI chat
             .route("/api/ai/chat", post(api::ai_chat_handler))
             .route("/api/ai/chat/stream", post(api::ai_chat_stream_handler))
+            // Cloud TTS (OpenAI proxy)
+            .route("/api/tts", post(api::tts_handler))
             // Event stream (SSE)
             .route("/events", get(api::events_handler))
             // Zones JSON for the web UI

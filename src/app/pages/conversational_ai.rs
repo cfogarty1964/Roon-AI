@@ -1,8 +1,9 @@
-use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, Suggestion, Zone, ZonesResponse};
+use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, RecentTrack, Suggestion, Zone, ZonesResponse};
 use crate::app::components::Layout;
 use crate::app::default_zone::use_default_zone;
 use crate::app::sse::use_sse;
 use crate::app::voice_context::use_voice;
+use crate::app::wake_word_context::use_wake_word;
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,9 @@ struct ChatMessage {
 }
 
 /// Streaming events from the server, deserialised from each SSE message's
-/// JSON `data` payload. Mirrors `crate::ai::StreamEvent` server-side.
+/// JSON `data` payload. Mirrors `crate::ai::StreamEvent` server-side, plus
+/// one client-only variant (`SpeechComplete`) emitted by STREAM_CONSUMER_JS
+/// after the per-sentence TTS queue drains.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AgentEvent {
@@ -77,6 +80,10 @@ enum AgentEvent {
         suggestions: Vec<Suggestion>,
     },
     Error { message: String },
+    /// Sent by STREAM_CONSUMER_JS after `Done` AND the TTS audio queue has
+    /// fully drained. The Rust loop uses this to gate continuous-mode
+    /// listening restart so the mic doesn't open over still-playing speech.
+    SpeechComplete,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +119,7 @@ fn do_send_text(
     selected_zone: Signal<String>,
     speech: SpeechCtx,
     current_track: Signal<Option<CurrentTrack>>,
+    recent_tracks: Signal<Vec<RecentTrack>>,
 ) {
     if msg.is_empty() || *loading.read() {
         return;
@@ -122,6 +130,7 @@ fn do_send_text(
     };
     let history = build_history(&messages.read());
     let track_snapshot = current_track.read().clone();
+    let recent_snapshot = recent_tracks.read().clone();
 
     // Push the user turn + an in-progress streaming assistant bubble.
     messages.write().push(ChatMessage {
@@ -151,6 +160,7 @@ fn do_send_text(
         zone_id: zone,
         history,
         current_track: track_snapshot,
+        recent_tracks: recent_snapshot,
     };
     let req_json = match serde_json::to_value(&req) {
         Ok(v) => v,
@@ -161,12 +171,22 @@ fn do_send_text(
         }
     };
 
+    // Snapshot speech enable + voice at request-start so STREAM_CONSUMER_JS
+    // sees a stable choice for the duration of this turn (toggling Speak mid-
+    // stream would otherwise leave a half-finished TTS session orphaned).
+    let speak_enabled = *speech.speak_enabled.read();
+    let voice_str = speech.selected_voice.read().clone();
+    let consumer_payload = serde_json::json!({
+        "request": req_json,
+        "speak": speak_enabled,
+        "voice": voice_str,
+    });
+
     spawn(async move {
         let mut eval = dioxus::document::eval(STREAM_CONSUMER_JS);
-        // Send the request body to the JS side.
-        let _ = eval.send(req_json);
+        let _ = eval.send(consumer_payload);
 
-        let mut spoken_markdown: Option<String> = None;
+        let mut done_seen = false;
 
         loop {
             match eval.recv::<AgentEvent>().await {
@@ -174,8 +194,6 @@ fn do_send_text(
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
                         m.text.push_str(&text);
-                        // Coalesce consecutive text deltas into one segment
-                        // so the inline render doesn't fragment a sentence.
                         match m.stream_parts.last_mut() {
                             Some(StreamPart::Text(t)) => t.push_str(&text),
                             _ => m.stream_parts.push(StreamPart::Text(text)),
@@ -190,9 +208,6 @@ fn do_send_text(
                     }
                 }
                 Ok(AgentEvent::Done { response, response_markdown, suggestions }) => {
-                    if *speech.speak_enabled.read() {
-                        spoken_markdown = Some(response_markdown.clone());
-                    }
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
                         m.text = response;
@@ -200,6 +215,13 @@ fn do_send_text(
                         m.suggestions = suggestions;
                         m.streaming = false;
                     }
+                    done_seen = true;
+                    // Don't break — wait for SpeechComplete so we know the
+                    // audio queue has drained before re-opening the mic.
+                    // The bubble itself is already finalised here.
+                    loading.set(false);
+                }
+                Ok(AgentEvent::SpeechComplete) => {
                     break;
                 }
                 Ok(AgentEvent::Error { message }) => {
@@ -212,7 +234,8 @@ fn do_send_text(
                     break;
                 }
                 Err(_) => {
-                    // Stream ended without a Done event (network drop / parse failure).
+                    // Stream ended without any closing event (network drop /
+                    // parse failure / eval channel closed).
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
                         if m.streaming {
@@ -227,23 +250,8 @@ fn do_send_text(
         }
         loading.set(false);
 
-        if let Some(md) = spoken_markdown {
-            let voice = speech.selected_voice.read().clone();
-            let payload = serde_json::to_string(&md).unwrap_or_else(|_| "\"\"".into());
-            let voice_payload = if voice.is_empty() {
-                "null".to_string()
-            } else {
-                serde_json::to_string(&voice).unwrap_or_else(|_| "null".into())
-            };
-            let script = format!(
-                "await window.RoonSpeech.speak({}, {}); return \"done\";",
-                payload, voice_payload
-            );
-            let _ = dioxus::document::eval(&script).join::<serde_json::Value>().await;
-
-            if *speech.continuous.read() {
-                start_listening_task(messages, loading, selected_zone, speech, current_track);
-            }
+        if done_seen && *speech.continuous.read() {
+            start_listening_task(messages, loading, selected_zone, speech, current_track, recent_tracks);
         }
     });
 }
@@ -266,8 +274,79 @@ impl ChatMessagesExt for Vec<ChatMessage> {
 
 /// JS module that runs a fetch+stream against `/api/ai/chat/stream`, parses
 /// SSE events, and forwards each event JSON to Rust via `dioxus.send`.
+///
+/// Per-sentence TTS is woven into this same loop: when `speak` is enabled, each
+/// text delta is appended to a sentence buffer; complete sentences are
+/// dispatched to `RoonSpeech.queueTtsChunk()` immediately so the spoken reply
+/// starts (and overlaps with) the streaming text. After the server's `done`
+/// event we close the TTS session, await drain, then send a `speech_complete`
+/// event so the Rust side knows it's safe to restart listening (continuous
+/// mode) without speaking over a still-playing utterance.
 const STREAM_CONSUMER_JS: &str = r#"
-const req = await dioxus.recv();
+const payload = await dioxus.recv();
+const req = payload && payload.request ? payload.request : payload;
+const speakEnabled = !!(payload && payload.speak);
+const voice = (payload && typeof payload.voice === "string") ? payload.voice : "";
+
+// Sentence buffer for per-sentence TTS. Detected via a regex that splits on
+// terminal punctuation (.!?) followed by whitespace AND a likely sentence-start
+// (uppercase / quote / paren). Avoids false positives on '3.14 pies' but tolerates
+// occasional false positives on abbreviations like 'Mr. Smith' (no perceptible
+// damage — TTS just briefly pauses where a human wouldn't).
+const SENTENCE_END = /[.!?](?:["')\]]+)?\s+(?=[A-Z"'(À-ɏ]|$)/;
+// Avoid speaking the suggestions sentinel itself if a token boundary lands on it.
+const SUGGESTIONS_OPEN = "<<<SUGGESTIONS>>>";
+const FORCE_FLUSH_LEN = 220; // force a chunk after this many chars even without a boundary
+let sentenceBuf = "";
+let suppressTts = false; // flips true once we encounter the suggestions block
+
+if (speakEnabled) {
+    try { window.RoonSpeech.startTtsSession(voice); } catch (e) {}
+}
+
+function _flushSentenceBuf(force) {
+    if (!speakEnabled || suppressTts) return;
+    while (true) {
+        if (!sentenceBuf) return;
+        // If we see the start of the suggestions sentinel, stop speaking from here
+        // on — the rest of the text is JSON not meant for TTS.
+        const sIdx = sentenceBuf.indexOf(SUGGESTIONS_OPEN);
+        if (sIdx === 0) { suppressTts = true; sentenceBuf = ""; return; }
+        const m = SENTENCE_END.exec(sentenceBuf);
+        if (m) {
+            const cut = m.index + m[0].length;
+            const sentence = sentenceBuf.slice(0, cut);
+            sentenceBuf = sentenceBuf.slice(cut);
+            if (sIdx > -1 && sIdx < cut) {
+                // Sentinel hit before the boundary — speak only what came before it
+                try { window.RoonSpeech.queueTtsChunk(sentence.slice(0, sIdx)); } catch (e) {}
+                suppressTts = true;
+                sentenceBuf = "";
+                return;
+            }
+            try { window.RoonSpeech.queueTtsChunk(sentence); } catch (e) {}
+            continue;
+        }
+        if (force || sentenceBuf.length >= FORCE_FLUSH_LEN) {
+            // No sentence boundary in the (long enough) buffer — speak it as-is
+            // to bound latency. Try to break on a comma/space if possible.
+            let cut = sentenceBuf.length;
+            if (!force) {
+                const commaIdx = sentenceBuf.lastIndexOf(", ");
+                const spaceIdx = sentenceBuf.lastIndexOf(" ");
+                cut = commaIdx > 50 ? commaIdx + 1 : (spaceIdx > 50 ? spaceIdx + 1 : sentenceBuf.length);
+            }
+            const chunk = sentenceBuf.slice(0, cut);
+            sentenceBuf = sentenceBuf.slice(cut);
+            try { window.RoonSpeech.queueTtsChunk(chunk); } catch (e) {}
+            if (!sentenceBuf) return;
+            // loop again in case force flush left more
+            continue;
+        }
+        return;
+    }
+}
+
 try {
     const response = await fetch('/api/ai/chat/stream', {
         method: 'POST',
@@ -277,11 +356,14 @@ try {
     if (!response.ok) {
         const t = await response.text();
         dioxus.send({ kind: 'error', message: `HTTP ${response.status}: ${t}` });
+        if (speakEnabled) { try { await window.RoonSpeech.closeTtsSession(); } catch (e) {} }
+        dioxus.send({ kind: 'speech_complete' });
         return;
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let sawDone = false;
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -294,17 +376,173 @@ try {
                 if (line.startsWith('data:')) {
                     const data = line.slice(5).trim();
                     if (!data) continue;
-                    try {
-                        dioxus.send(JSON.parse(data));
-                    } catch (e) { /* skip malformed */ }
+                    let evt;
+                    try { evt = JSON.parse(data); } catch (e) { continue; }
+                    // Forward to Rust first so the bubble updates promptly
+                    dioxus.send(evt);
+                    // Per-sentence TTS dispatch
+                    if (speakEnabled && evt && evt.kind === "text" && typeof evt.text === "string") {
+                        sentenceBuf += evt.text;
+                        _flushSentenceBuf(false);
+                    }
+                    if (evt && evt.kind === "done") {
+                        sawDone = true;
+                        if (speakEnabled) _flushSentenceBuf(true);
+                    }
                 }
             }
         }
     }
+    // Stream closed. If we got Done, await TTS queue drain then signal complete.
+    // If we never got Done (network drop), still signal complete so Rust loop
+    // doesn't block forever.
+    if (speakEnabled) {
+        if (!sawDone) _flushSentenceBuf(true);
+        try { await window.RoonSpeech.closeTtsSession(); } catch (e) {}
+    }
+    dioxus.send({ kind: 'speech_complete' });
 } catch (e) {
     dioxus.send({ kind: 'error', message: String(e) });
+    if (speakEnabled) { try { await window.RoonSpeech.closeTtsSession(); } catch (e2) {} }
+    dioxus.send({ kind: 'speech_complete' });
 }
 "#;
+
+/// JS module that wraps Picovoice Porcupine for browser-side wake-word
+/// detection. Idempotent: re-running this script is safe if the module is
+/// already installed.
+///
+/// **Fully scaffold-grade.** Until the user vendors three files into the
+/// project's `public/wake-word/` directory the engine never initialises and
+/// every method is a graceful no-op:
+///   - `porcupine_web.iife.js` — Picovoice browser SDK (IIFE bundle from a
+///     `@picovoice/porcupine-web` release)
+///   - `pv_porcupine.wasm` — the engine WASM blob
+///   - `Hey-Roon-AI_en.ppn` — the trained wake-word model the user generates
+///     at <https://console.picovoice.ai/> (platform = WebAssembly)
+///
+/// `init(accessKey)` returns `true` only when all three are present, the
+/// access key is valid, and the engine bootstraps successfully. `start()` /
+/// `pause()` / `resume()` / `stop()` then drive the WebVoiceProcessor mic
+/// subscription. Detections fire `RoonWake.onDetection()` if registered.
+const WAKE_WORD_INSTALL_JS: &str = r#"
+if (!window.RoonWake) {
+    window.RoonWake = {
+        ready: false,
+        active: false,
+        worker: null,
+        onDetection: null,
+        async _ensureSdkLoaded() {
+            if (window.PorcupineWeb) return true;
+            // Probe for the IIFE bundle. If 404, the user hasn't vendored.
+            try {
+                const head = await fetch('/wake-word/porcupine_web.iife.js', { method: 'HEAD' });
+                if (!head.ok) return false;
+            } catch (e) { return false; }
+            // Inject script tag if not already injected.
+            if (document.querySelector('script[data-roon-porcupine]')) {
+                // Already injecting; wait briefly for it to settle.
+                for (let i = 0; i < 30 && !window.PorcupineWeb; i++) {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                return !!window.PorcupineWeb;
+            }
+            return await new Promise((resolve) => {
+                const s = document.createElement('script');
+                s.src = '/wake-word/porcupine_web.iife.js';
+                s.dataset.roonPorcupine = '1';
+                s.onload = () => resolve(!!window.PorcupineWeb);
+                s.onerror = () => resolve(false);
+                document.head.appendChild(s);
+            });
+        },
+        async init(accessKey) {
+            if (this.ready) return true;
+            if (!accessKey) return false;
+            const sdk = await this._ensureSdkLoaded();
+            if (!sdk) return false;
+            try {
+                this.worker = await window.PorcupineWeb.PorcupineWorker.create(
+                    accessKey,
+                    [{ publicPath: '/wake-word/Hey-Roon-AI_en.ppn', label: 'roon-ai' }],
+                    () => { try { if (this.onDetection) this.onDetection(); } catch (e) {} },
+                    { publicPath: '/wake-word/pv_porcupine.wasm' }
+                );
+                this.ready = true;
+                return true;
+            } catch (e) {
+                console.warn('Porcupine init failed:', e);
+                return false;
+            }
+        },
+        async start() {
+            if (!this.ready || this.active) return this.active;
+            try {
+                await window.PorcupineWeb.WebVoiceProcessor.subscribe(this.worker);
+                this.active = true;
+                return true;
+            } catch (e) { return false; }
+        },
+        async pause() {
+            if (!this.active) return;
+            try { await window.PorcupineWeb.WebVoiceProcessor.unsubscribe(this.worker); } catch (e) {}
+            this.active = false;
+        },
+        async resume() {
+            return this.start();
+        },
+        async stop() {
+            if (this.active) {
+                try { await window.PorcupineWeb.WebVoiceProcessor.unsubscribe(this.worker); } catch (e) {}
+                this.active = false;
+            }
+            if (this.worker) {
+                try { await this.worker.terminate(); } catch (e) {}
+                this.worker = null;
+            }
+            this.ready = false;
+            this.onDetection = null;
+        }
+    };
+}
+return true;
+"#;
+
+/// Long-running eval task: receives `{accessKey}` via `dioxus.recv()`, inits
+/// Porcupine, then sends `{kind: "ready"}` and forwards each subsequent
+/// detection as `{kind: "detected"}`. Sends `{kind: "failed", reason}` if
+/// the engine can't initialise. The task is abandoned (eval dropped) when
+/// the user disables the wake word — at which point a separate one-shot
+/// eval calls `window.RoonWake.stop()` to halt the engine.
+const WAKE_WORD_LISTEN_JS: &str = r#"
+const cfg = await dioxus.recv();
+const ok = await window.RoonWake.init(cfg && cfg.accessKey);
+if (!ok) {
+    dioxus.send({ kind: 'failed', reason: 'init failed (check assets in public/wake-word/ and your access key)' });
+    return;
+}
+window.RoonWake.onDetection = () => { try { dioxus.send({ kind: 'detected' }); } catch (e) {} };
+const started = await window.RoonWake.start();
+if (!started) {
+    dioxus.send({ kind: 'failed', reason: 'failed to acquire microphone' });
+    return;
+}
+dioxus.send({ kind: 'ready' });
+// Keep the eval alive so the detection callback stays valid. When the
+// outer task is dropped (Rust drops the eval), this Promise never resolves
+// — that's fine, the engine is still running on the JS side until
+// window.RoonWake.stop() is called by the disable handler.
+await new Promise(() => {});
+"#;
+
+/// Events from `WAKE_WORD_LISTEN_JS`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum WakeEvent {
+    Ready,
+    Detected,
+    Failed { reason: String },
+}
 
 /// Start mic capture in a spawned task. On result, auto-submits via do_send_text.
 fn start_listening_task(
@@ -313,6 +551,7 @@ fn start_listening_task(
     selected_zone: Signal<String>,
     speech: SpeechCtx,
     current_track: Signal<Option<CurrentTrack>>,
+    recent_tracks: Signal<Vec<RecentTrack>>,
 ) {
     let mut listening = speech.listening;
     if *listening.read() || *loading.read() {
@@ -336,7 +575,7 @@ fn start_listening_task(
                 if let Some(text) = v.get("text").and_then(|t| t.as_str()) {
                     let trimmed = text.trim().to_string();
                     if !trimmed.is_empty() {
-                        do_send_text(trimmed, messages, loading, selected_zone, speech, current_track);
+                        do_send_text(trimmed, messages, loading, selected_zone, speech, current_track, recent_tracks);
                     }
                 }
             }
@@ -356,6 +595,22 @@ if (!window.RoonSpeech) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     let _recog = null;
 
+    // ===== Streaming TTS session state (module-scoped so cancelSpeech() and
+    // a new session always tear down the previous one cleanly). =====
+    let _ttsActive = false;       // a session is open (between start and close)
+    let _ttsClosed = false;       // close was called; awaiting drain
+    let _ttsVoice = null;         // voiceName from Settings (browser name or "openai:<id>")
+    let _ttsSeq = 0;              // submitted-chunk counter (drives ordering)
+    let _ttsNextPlay = 0;         // OpenAI: next sequence to play
+    let _ttsBlobs = new Map();    // OpenAI: seq -> blob (received but waiting in line)
+    let _ttsPending = 0;          // outstanding chunks (fetch-in-flight OR queued OR speaking)
+    let _ttsAudio = null;         // OpenAI: currently-playing Audio element
+    let _ttsObjectUrls = new Set(); // OpenAI: object URLs to revoke on cancel
+    let _ttsBrowserUtterances = []; // browser path: utterances still in queue/speaking
+    let _ttsAbort = null;         // shared AbortController for OpenAI fetches in this session
+    let _ttsCompleteResolve = null;
+    let _ttsCompletePromise = null;
+
     function plainify(md) {
         return String(md || "")
             .replace(/```[\s\S]*?```/g, "")
@@ -373,6 +628,119 @@ if (!window.RoonSpeech) {
             .replace(/\n/g, " ")
             .replace(/\s+/g, " ")
             .trim();
+    }
+
+    function _isOpenAi(voiceName) {
+        return typeof voiceName === "string" && voiceName.startsWith("openai:");
+    }
+
+    function _maybeFinishTts() {
+        if (!_ttsActive) return;
+        if (!_ttsClosed) return;
+        if (_ttsPending > 0) return;
+        // All chunks submitted, drained, audio finished → resolve.
+        _ttsActive = false;
+        _ttsClosed = false;
+        const r = _ttsCompleteResolve;
+        _ttsCompleteResolve = null;
+        _ttsCompletePromise = null;
+        if (r) r();
+    }
+
+    function _resetTtsState() {
+        if (_ttsAbort) { try { _ttsAbort.abort(); } catch (e) {} _ttsAbort = null; }
+        if (_ttsAudio) { try { _ttsAudio.pause(); _ttsAudio.src = ""; } catch (e) {} _ttsAudio = null; }
+        for (const u of _ttsObjectUrls) { try { URL.revokeObjectURL(u); } catch (e) {} }
+        _ttsObjectUrls.clear();
+        _ttsBlobs.clear();
+        _ttsBrowserUtterances.length = 0;
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+        _ttsActive = false;
+        _ttsClosed = false;
+        _ttsPending = 0;
+        _ttsSeq = 0;
+        _ttsNextPlay = 0;
+        if (_ttsCompleteResolve) { try { _ttsCompleteResolve(); } catch (e) {} _ttsCompleteResolve = null; }
+        _ttsCompletePromise = null;
+    }
+
+    async function _openAiChunk(seq, text, voice) {
+        const ctrl = _ttsAbort;
+        let resp;
+        try {
+            resp = await fetch('/api/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, voice }),
+                signal: ctrl ? ctrl.signal : undefined,
+            });
+        } catch (e) {
+            // aborted or network — drop the chunk, decrement, and try to drain
+            _ttsPending--;
+            _maybeFinishTts();
+            return;
+        }
+        if (!_ttsActive) { _ttsPending--; _maybeFinishTts(); return; }
+        if (!resp.ok) {
+            try { const t = await resp.text(); console.warn('TTS error', resp.status, t); } catch (e) {}
+            _ttsPending--;
+            _maybeFinishTts();
+            return;
+        }
+        let blob;
+        try { blob = await resp.blob(); } catch (e) { _ttsPending--; _maybeFinishTts(); return; }
+        if (!_ttsActive) { _ttsPending--; _maybeFinishTts(); return; }
+        _ttsBlobs.set(seq, blob);
+        _maybePlayNextOpenAi();
+    }
+
+    function _maybePlayNextOpenAi() {
+        if (!_ttsActive) return;
+        if (_ttsAudio) return;
+        const blob = _ttsBlobs.get(_ttsNextPlay);
+        if (!blob) {
+            // The next-in-line chunk hasn't arrived yet. If we've drained
+            // everything and there's nothing pending, finish.
+            _maybeFinishTts();
+            return;
+        }
+        _ttsBlobs.delete(_ttsNextPlay);
+        const url = URL.createObjectURL(blob);
+        _ttsObjectUrls.add(url);
+        const audio = new Audio(url);
+        _ttsAudio = audio;
+        const onDone = () => {
+            if (_ttsAudio === audio) _ttsAudio = null;
+            if (_ttsObjectUrls.has(url)) {
+                try { URL.revokeObjectURL(url); } catch (e) {}
+                _ttsObjectUrls.delete(url);
+            }
+            _ttsNextPlay++;
+            _ttsPending--;
+            _maybePlayNextOpenAi();
+        };
+        audio.onended = onDone;
+        audio.onerror = onDone;
+        try { audio.play().catch(onDone); } catch (e) { onDone(); }
+    }
+
+    function _browserChunk(seq, text, voiceName) {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = navigator.language || "en-US";
+        if (voiceName) {
+            const v = window.speechSynthesis.getVoices().find(v => v.name === voiceName);
+            if (v) { u.voice = v; u.lang = v.lang; }
+        }
+        _ttsBrowserUtterances.push(u);
+        const onDone = () => {
+            const i = _ttsBrowserUtterances.indexOf(u);
+            if (i >= 0) _ttsBrowserUtterances.splice(i, 1);
+            _ttsPending--;
+            _maybeFinishTts();
+        };
+        u.onend = onDone;
+        u.onerror = onDone;
+        try { window.speechSynthesis.speak(u); } catch (e) { onDone(); }
     }
 
     window.RoonSpeech = {
@@ -397,24 +765,52 @@ if (!window.RoonSpeech) {
         stopListening() {
             if (_recog) { try { _recog.stop(); } catch (e) {} _recog = null; }
         },
+        // Streaming TTS API — used by STREAM_CONSUMER_JS for per-sentence
+        // playback while a reply is generating.
+        startTtsSession(voice) {
+            _resetTtsState();
+            _ttsActive = true;
+            _ttsClosed = false;
+            _ttsVoice = voice || null;
+            _ttsSeq = 0;
+            _ttsNextPlay = 0;
+            _ttsBlobs = new Map();
+            _ttsBrowserUtterances = [];
+            _ttsObjectUrls = new Set();
+            _ttsAbort = new AbortController();
+            _ttsCompletePromise = new Promise(r => { _ttsCompleteResolve = r; });
+        },
+        queueTtsChunk(text) {
+            if (!_ttsActive) return;
+            const trimmed = String(text || "").trim();
+            if (!trimmed) return;
+            const seq = _ttsSeq++;
+            _ttsPending++;
+            const plain = plainify(trimmed);
+            if (!plain) { _ttsPending--; return; }
+            if (_isOpenAi(_ttsVoice)) {
+                _openAiChunk(seq, plain, _ttsVoice.slice(7));
+            } else {
+                _browserChunk(seq, plain, _ttsVoice);
+            }
+        },
+        closeTtsSession() {
+            if (!_ttsActive) return Promise.resolve();
+            _ttsClosed = true;
+            const p = _ttsCompletePromise || Promise.resolve();
+            _maybeFinishTts();
+            return p;
+        },
+        // Legacy single-shot speak — used for any callers outside the
+        // streaming path. Internally goes through the same queue so cancel
+        // semantics are uniform.
         speak(md, voiceName) {
-            const text = plainify(md);
-            window.speechSynthesis.cancel();
-            if (!text) return Promise.resolve();
-            return new Promise((resolve) => {
-                const u = new SpeechSynthesisUtterance(text);
-                u.lang = navigator.language || "en-US";
-                if (voiceName) {
-                    const voice = window.speechSynthesis.getVoices().find(v => v.name === voiceName);
-                    if (voice) { u.voice = voice; u.lang = voice.lang; }
-                }
-                u.onend = () => resolve();
-                u.onerror = () => resolve();
-                window.speechSynthesis.speak(u);
-            });
+            this.startTtsSession(voiceName);
+            this.queueTtsChunk(md);
+            return this.closeTtsSession();
         },
         cancelSpeech() {
-            try { window.speechSynthesis.cancel(); } catch (e) {}
+            _resetTtsState();
         },
         listVoices() {
             try {
@@ -438,13 +834,14 @@ fn do_send(
     selected_zone: Signal<String>,
     speech: SpeechCtx,
     current_track: Signal<Option<CurrentTrack>>,
+    recent_tracks: Signal<Vec<RecentTrack>>,
 ) {
     let msg = input.read().trim().to_string();
     if msg.is_empty() || *loading.read() {
         return;
     }
     input.set(String::new());
-    do_send_text(msg, messages, loading, selected_zone, speech, current_track);
+    do_send_text(msg, messages, loading, selected_zone, speech, current_track, recent_tracks);
 }
 
 fn play_message_for(s: &Suggestion) -> String {
@@ -725,6 +1122,79 @@ pub fn ConversationalAi() -> Element {
             if let Ok(supported) = e.join::<bool>().await {
                 stt_supported.set(supported);
             }
+            // Install wake-word JS module too — idempotent, safe even if
+            // assets aren't present (init will fail gracefully if so).
+            let _ = dioxus::document::eval(WAKE_WORD_INSTALL_JS).join::<bool>().await;
+        });
+    });
+
+    // Wake-word: shared context (toggle + access key live in Settings page).
+    let wake_ctx = use_wake_word();
+
+    // Spawn / shut down the Porcupine listener when the user toggles wake word
+    // or pastes a new access key. When (enabled && key) flip true together,
+    // run WAKE_WORD_LISTEN_JS and forward detections into wake_ctx.detected_count.
+    // When either flips off, fire a one-shot stop on the JS side. The previous
+    // listener task's eval is left to garbage-collect; window.RoonWake.stop()
+    // cleared the detection callback, so any straggler events are no-ops.
+    use_effect(move || {
+        let enabled = *wake_ctx.enabled.read();
+        let access_key = wake_ctx.access_key.read().clone();
+        let mut status = wake_ctx.status;
+
+        if !enabled {
+            status.set("Off".into());
+            spawn(async {
+                let _ = dioxus::document::eval(
+                    "if (window.RoonWake) await window.RoonWake.stop(); return true;",
+                )
+                .join::<bool>()
+                .await;
+            });
+            return;
+        }
+        if access_key.is_empty() {
+            status.set("Access key required".into());
+            return;
+        }
+
+        status.set("Initialising…".into());
+        let mut detected_count = wake_ctx.detected_count;
+        spawn(async move {
+            let mut eval = dioxus::document::eval(WAKE_WORD_LISTEN_JS);
+            let _ = eval.send(serde_json::json!({ "accessKey": access_key }));
+            loop {
+                match eval.recv::<WakeEvent>().await {
+                    Ok(WakeEvent::Ready) => {
+                        status.set("Listening for 'Hey Roon AI'".into());
+                    }
+                    Ok(WakeEvent::Detected) => {
+                        let next = *detected_count.peek() + 1;
+                        detected_count.set(next);
+                    }
+                    Ok(WakeEvent::Failed { reason }) => {
+                        status.set(format!("Failed: {}", reason));
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    });
+
+    // Pause Porcupine while we're busy (a request is in flight or the mic is
+    // open) so the wake word doesn't false-trigger from the AI's spoken reply
+    // or from the user's STT capture itself. Resume when both go idle.
+    use_effect(move || {
+        if !*wake_ctx.enabled.read() { return; }
+        let busy = *loading.read() || *listening.read();
+        let cmd = if busy { "pause" } else { "resume" };
+        let script = format!(
+            "if (window.RoonWake) {{ try {{ await window.RoonWake.{}(); }} catch (e) {{}} }} return true;",
+            cmd
+        );
+        spawn(async move {
+            let _ = dioxus::document::eval(&script).join::<bool>().await;
         });
     });
 
@@ -868,11 +1338,65 @@ pub fn ConversationalAi() -> Element {
         current_track.set(track);
     });
 
-    let send = move |_: Event<MouseData>| do_send(input, messages, loading, selected_zone, speech, current_track);
+    // Ring buffer of recently-played tracks (most recent first, capped at 3).
+    // Populated when `current_track` transitions to a NEW title — the old track
+    // is pushed onto the buffer so Claude has implicit "play more like that"
+    // context without the user having to type the title.
+    //
+    // We subscribe to BOTH current_track and prev_track. Writing to prev_track
+    // re-fires the effect once, but the early-return on equal titles prevents
+    // any infinite loop. Saves us a `peek()` import.
+    let mut prev_track: Signal<Option<CurrentTrack>> = use_signal(|| None);
+    let mut recent_tracks: Signal<Vec<RecentTrack>> = use_signal(Vec::new);
+    use_effect(move || {
+        let now = current_track.read().clone();
+        let prev = prev_track.read().clone();
+        let now_title = now
+            .as_ref()
+            .and_then(|t| t.title.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let prev_title = prev
+            .as_ref()
+            .and_then(|t| t.title.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if now_title == prev_title {
+            return;
+        }
+        if !prev_title.is_empty() {
+            let entry = RecentTrack {
+                title: prev_title.clone(),
+                artist: prev.as_ref().and_then(|t| t.artist.clone()),
+                album: prev.as_ref().and_then(|t| t.album.clone()),
+            };
+            let mut list = recent_tracks.read().clone();
+            list.retain(|t| !t.title.eq_ignore_ascii_case(&entry.title));
+            list.insert(0, entry);
+            list.truncate(3);
+            recent_tracks.set(list);
+        }
+        prev_track.set(now);
+    });
+
+    // Wake-word detection → trigger STT (same code path as the manual mic
+    // button). Watches the detected_count counter; each increment fires once.
+    // The pause-while-busy effect above prevents detections from accumulating
+    // during streaming or active mic capture, so we don't risk re-entering.
+    use_effect(move || {
+        let n = *wake_ctx.detected_count.read();
+        if n == 0 { return; }
+        if *loading.read() || *listening.read() { return; }
+        start_listening_task(messages, loading, selected_zone, speech, current_track, recent_tracks);
+    });
+
+    let send = move |_: Event<MouseData>| do_send(input, messages, loading, selected_zone, speech, current_track, recent_tracks);
 
     let on_keydown = move |e: Event<KeyboardData>| {
         if e.key() == Key::Enter && !e.modifiers().shift() {
-            do_send(input, messages, loading, selected_zone, speech, current_track);
+            do_send(input, messages, loading, selected_zone, speech, current_track, recent_tracks);
         }
     };
 
@@ -884,7 +1408,7 @@ pub fn ConversationalAi() -> Element {
                     .join::<serde_json::Value>().await;
             });
         } else {
-            start_listening_task(messages, loading, selected_zone, speech, current_track);
+            start_listening_task(messages, loading, selected_zone, speech, current_track, recent_tracks);
         }
     };
 
@@ -1384,7 +1908,7 @@ pub fn ConversationalAi() -> Element {
                                                                     button {
                                                                         class: "btn-primary px-2 py-0.5 text-xs disabled:opacity-50",
                                                                         disabled: is_loading,
-                                                                        onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track),
+                                                                        onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
                                                                         "▶ Play"
                                                                     }
                                                                     span { class: "truncate", "{label}" }
