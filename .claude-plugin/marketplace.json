@@ -1,8 +1,8 @@
 {
   "name": "hifi-control",
   "owner": {
-    "name": "Cloud Atlas AI",
-    "email": "hello@cloudatlas.ai"
+    "name": "RooAI",
+    "email": "cfogarty@221bbakerstreet.net"
   },
   "metadata": {
     "description": "Roon AI - Control Roon and HQPlayer",
@@ -15,7 +15,7 @@
       "description": "Control your hi-fi system - Roon playback, HQPlayer pipeline settings, volume control, and more.",
       "version": "2.5.1-rc.9",
       "author": {
-        "name": "Cloud Atlas AI"
+        "name": "RooAI"
       }
     }
   ]

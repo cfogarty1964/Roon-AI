@@ -2,12 +2,7 @@
   "name": "roon-ai",
   "version": "3.0.0-rc.1",
   "description": "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant",
-  "bin": {
-    "roon-ai-mcp": "mcp/index.js"
-  },
-  "scripts": {
-    "mcp": "node mcp/index.js"
-  },
+  "scripts": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cfogarty1964/Roon-AI.git"

@@ -30,13 +30,6 @@ struct BrowseLoadRequest {
     count: Option<usize>,
 }
 
-#[derive(Clone, serde::Serialize)]
-struct PlayItemRequest {
-    item_key: String,
-    zone_id: String,
-    action: String,
-}
-
 // ---------------------------------------------------------------------------
 // Page-local state
 // ---------------------------------------------------------------------------

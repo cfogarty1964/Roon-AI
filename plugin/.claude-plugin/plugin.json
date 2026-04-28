@@ -3,8 +3,8 @@
   "version": "2.5.1-rc.9",
   "description": "Roon AI - Control Roon playback and HQPlayer audio pipeline",
   "author": {
-    "name": "Cloud Atlas AI",
-    "email": "hello@cloudatlas.ai",
+    "name": "RooAI",
+    "email": "cfogarty@221bbakerstreet.net",
     "url": "https://github.com/cfogarty1964/Roon-AI"
   },
   "repository": "https://github.com/cfogarty1964/Roon-AI",
