@@ -1074,11 +1074,22 @@ pub fn ConversationalAi() -> Element {
                                             "/roon/image?image_key={}&width=80&height=80",
                                             urlencoding::encode(key)
                                         );
+                                        let full_url = format!(
+                                            "/roon/image?image_key={}&width=1024&height=1024",
+                                            urlencoding::encode(key)
+                                        );
                                         rsx! {
-                                            img {
-                                                src: "{url}",
-                                                alt: "",
-                                                class: "w-10 h-10 object-cover rounded-md flex-shrink-0 bg-muted"
+                                            a {
+                                                href: "{full_url}",
+                                                target: "_blank",
+                                                rel: "noopener noreferrer",
+                                                title: "Open full-size in new tab",
+                                                class: "flex-shrink-0",
+                                                img {
+                                                    src: "{url}",
+                                                    alt: "Album art",
+                                                    class: "w-10 h-10 object-cover rounded-md bg-muted cursor-zoom-in hover:opacity-80 transition-opacity",
+                                                }
                                             }
                                         }
                                     } else {

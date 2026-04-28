@@ -2552,3 +2552,42 @@ Now: `fn main()` is synchronous. It:
 - **#4 — History-aware system prompt** (~1h, highest value-to-effort) is now the natural next pick.
 - **#1 — Wake word** still the biggest UX upgrade. Pair it with #5 (per-token TTS) for full voice-mode treatment.
 - Anything else if real usage surfaces a different priority.
+
+---
+
+## Recent Work (2026-04-28, fourth pass) — Album-Art Lightbox + Version Bump to 3.4.0
+
+Two small wins shipped together:
+
+### Album-art click → full-size in a new tab
+
+The 40×40 thumbnail in the now-playing banner ([src/app/pages/conversational_ai.rs:1077](src/app/pages/conversational_ai.rs#L1077)) is now clickable. The `<img>` is wrapped in `<a href={1024px-url} target="_blank" rel="noopener noreferrer">` — click opens the full-size image (`/roon/image?image_key=...&width=1024&height=1024`, served on-demand by Roon) in a new browser tab. The browser handles scroll/zoom/save natively.
+
+**Why a new tab and not an in-page modal.** First attempt was a `position: fixed inset-0 z-50` overlay with a click-anywhere-to-close backdrop. It rendered, but the user reported the image landed somewhere they couldn't scroll to — the modal wasn't actually overlaying as a fixed-viewport element. Likely cause: a transform/filter on a parent in the Layout chain creates a containing block that turns `position: fixed` into `position: absolute` relative to that ancestor (a known CSS pitfall). Rather than chase that, swapped to `target="_blank"` — simpler, more robust, and the browser's image viewer is better than any modal we'd build.
+
+Visual polish: `cursor-zoom-in` on hover, `hover:opacity-80 transition-opacity` for affordance, `title="Open full-size in new tab"` for hover text. Placeholder ♪ (when no image_key) stays non-clickable.
+
+The library-page album art ([src/app/pages/library.rs:357](src/app/pages/library.rs#L357), [437](src/app/pages/library.rs#L437)) is *not* part of this — only the conversational AI banner. Could extend the same pattern to library if real usage surfaces a need.
+
+### Version bump 0.0.0 → 3.4.0
+
+`Cargo.toml` was sitting at `0.0.0` with the comment "Injected from git tag at build time" — meaning local builds reported v0.0.0 unless the user set `ROON_AI_VERSION` env var (which CI does from the git tag). Bumped to `3.4.0` so local builds report a meaningful number.
+
+**Why 3.4.0 specifically.** The fork inherited every tag from the upstream (`v3.0.0-rc.1` through `v3.3.2`). Today's earlier session created `v3.0.0` (the rebrand commit) since that slot was actually free in upstream. The next free slot is **`v3.4.0`** — `v3.1.x`, `v3.2.x`, `v3.3.x` are all claimed. Skipping to `.4` is unambiguous in the local lineage and keeps the semver story clean (additive features = minor bump). Alternative considered: `v4.0.0` to signal "first post-rebrand minor on a fresh foundation" — rejected as overstating the change.
+
+Build verification:
+- `cargo test --features server` — 117 tests passing
+- `dx build --release --platform web --features web` — client built, embedded into server
+- `cargo build --release --features server` — clean
+- Live binary `GET /status` reports `"version":"3.4.0","git_sha":"06cbb1e"` ✓
+- Lightbox manually verified: thumbnail click → overlay → backdrop/× dismiss
+
+### Known build quirk
+
+`dx build --release --platform web --features web` printed `cargo build finished with errors for target: roon-ai [x86_64-pc-windows-msvc]` even though the WASM client phase succeeded. A direct `cargo build --release --features server` afterwards succeeds. Looks like dx's wrapper step has a benign tail-failure that doesn't actually break the build artefacts. Not worth chasing for now; the two-command sequence (`dx build` then `cargo build --release --features server`) works reliably.
+
+### Next
+
+After v3.4.0 ships:
+- **#4 — History-aware system prompt** is still the highest value-to-effort. Slip the last 3 played tracks into the agent's system prompt so "play more like that" works.
+- **#1 — Wake word** remains the biggest UX leap available.
