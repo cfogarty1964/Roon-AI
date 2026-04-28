@@ -2646,3 +2646,73 @@ Estimated effort given the unknowns: 4-8 hours.
 ### Beneficial side effect
 
 `src/app/api.rs::post_json` now properly extracts the server's `{ "error": "..." }` body on non-2xx responses, instead of failing with the misleading "missing field" deserialise error. Caught while debugging the love feature; useful for any future endpoint that returns structured errors.
+
+---
+
+## Recent Work (2026-04-28, sixth pass) — v3.5.0: HTTPS for non-localhost mic access
+
+### Why
+
+Browsers gate "powerful APIs" (microphone, clipboard, geolocation, push, PWA install) behind a **secure context** — HTTPS or `localhost`. Plain `http://192.168.50.179:8088` fails that test, so the mic refused to record when the user opened the page from another PC on the LAN. Symptom was confirmed by the user navigating from `localhost` to the LAN IP and watching mic break.
+
+### What shipped
+
+Single port (8088) **switched from HTTP to HTTPS** with a self-signed certificate generated at first launch and persisted to `<data_dir>/certs/`. One URL pattern works everywhere:
+
+- `https://localhost:8088` from this PC
+- `https://192.168.50.179:8088` from any PC on the LAN
+- `https://StudioPC:8088` / `https://StudioPC.local:8088` if mDNS/NetBIOS resolves
+
+Each browser shows the "Your connection is not private" warning the first visit; clicking *Advanced → Proceed* persists for that origin. Mic and other powerful APIs work afterwards.
+
+### Implementation
+
+**Crates added** (server feature, all under `[dependencies]` with `optional = true`):
+- `axum-server = "0.7"` (feature `tls-rustls`) — `axum::serve` doesn't speak TLS; this is the standard Axum-with-TLS path
+- `rcgen = "0.13"` — self-signed cert generation
+- `if-addrs = "0.13"` — enumerate network interfaces to populate the cert SAN list with the host's actual LAN IPs
+- `rustls = "0.23"` (feature `ring`, no defaults) — direct dep for `CryptoProvider::install_default()` (see "Pitfall" below)
+
+**Cert generation** — `ensure_tls_certs()` in `src/main.rs`:
+1. Path: `<data_dir>/certs/roon-ai.{cert,key}.pem` (i.e. `%LOCALAPPDATA%\roon-ai\certs\` on Windows)
+2. If both files exist, reuse → idempotent restarts, no cert warning regression
+3. SAN list: `localhost`, `127.0.0.1`, `::1`, `<hostname>`, `<hostname>.local`, plus every non-loopback IPv4/IPv6 address from `if_addrs::get_if_addrs()`. rcgen auto-detects whether each entry is an IP or a DNS name based on parseability.
+4. Key written via `cert.key_pair.serialize_pem()` (note: the `key_pair` field, not `signing_key` — naming changed in rcgen 0.13)
+5. Cert lifetime defaults — effectively forever, per user request
+
+**Server change** — `src/main.rs` `server::run()`:
+- Signature gained `tls_cert_path` + `tls_key_path` parameters
+- `axum::serve(listener, …).with_graceful_shutdown(…)` replaced with `axum_server::bind_rustls(addr, tls_config).handle(handle).serve(…)`
+- Graceful shutdown reworked: axum-server uses an external `Handle` rather than the `with_graceful_shutdown(future)` pattern. A spawned task watches the existing shutdown signal and calls `handle.graceful_shutdown(Some(5s))` when fired.
+
+**Tray menu** — `Open Web UI` action now opens `https://localhost:8088` (was `http://`).
+
+**Version bump** — `Cargo.toml` `0.0.0` → `3.5.0`. Skipped `v3.4.2` because changing the URL scheme is a more substantive change than a patch implies.
+
+### Pitfall: rustls 0.23 multi-provider conflict
+
+First debug-build smoke-test had the server thread silently hang shortly after logging `TLS cert: …`. No error, no panic message in the log. Cause: rustls 0.23+ refuses to pick a `CryptoProvider` automatically when multiple are available, and our dep tree pulls in BOTH `aws-lc-rs` (via reqwest's rustls features) AND `ring` (via tokio-rustls). The first call into rustls panics:
+
+> `no process-level CryptoProvider available -- call CryptoProvider::install_default() before this point`
+
+Because `windows_subsystem = "windows"` in release builds (and to a lesser extent debug builds via `nohup` here) detaches stderr, the panic message goes nowhere visible. Fix: explicit `rustls::crypto::ring::default_provider().install_default()` at the top of `main()`, before any TLS work. Documented inline so the next person doesn't trip on the same thing.
+
+A diagnostic improvement also landed: the server-thread closure now logs any returned `Err` via `tracing::error!("server thread exited with error: {:#}", e)` before propagating, so silent-failure-mode is no longer an issue for *non-panic* errors. (Panics still need the explicit fix above.)
+
+### Verification
+
+- `cargo build --release --features server` clean
+- Live binary: `curl -k https://localhost:8088/status` returns the expected JSON
+- Browser at `https://localhost:8088` → cert warning → Proceed → page loads, mic works
+- Tray icon's "Open Web UI" opens HTTPS now
+
+### Known minor
+
+- Browser shows "Not secure" badge in the URL bar even after accepting the cert (because it's self-signed). Cosmetic; functional bits work. To eliminate: install a local CA via `mkcert` and re-issue (a half-day task; see option 3 from the prior conversation).
+- `https://0.0.0.0:8088` may cause confusion in browsers because `0.0.0.0` isn't a valid client-side address. The server binds `0.0.0.0` to listen on all interfaces; clients should use `localhost`/`127.0.0.1`/LAN IP.
+
+### What's actually next
+
+After v3.5.0:
+- Returns to the post-v3.0.0 brainstorm. **#4 (history-aware system prompt)** is still the highest value-to-effort.
+- The mic-on-LAN unblocks any "voice from another room" use case — pair with the wake-word work (#1) for the full hands-free vision.

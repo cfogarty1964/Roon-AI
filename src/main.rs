@@ -45,7 +45,11 @@ mod server {
         Redirect::to("/settings")
     }
 
-    pub async fn run(external_shutdown: oneshot::Receiver<()>) -> Result<()> {
+    pub async fn run(
+        external_shutdown: oneshot::Receiver<()>,
+        tls_cert_path: std::path::PathBuf,
+        tls_key_path: std::path::PathBuf,
+    ) -> Result<()> {
         tracing::info!(
             "Starting Roon AI v{} ({})",
             env!("ROON_AI_VERSION"),
@@ -262,20 +266,37 @@ mod server {
             router.serve_dioxus_application(dioxus::server::ServeConfig::new(), app::App)
         };
 
-        // Start server with graceful shutdown
+        // Start HTTPS server with graceful shutdown.
+        // We serve over TLS so the browser microphone API works from
+        // non-localhost origins (mic requires a "secure context": HTTPS or
+        // localhost). Self-signed cert; first-visit cert warning per browser.
         let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-        tracing::info!("Listening on http://{}", addr);
+        tracing::info!("Listening on https://{}", addr);
+        tracing::info!(
+            "TLS cert: {} (first-visit cert warning expected — accept once per browser)",
+            tls_cert_path.display()
+        );
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let tls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+            &tls_cert_path,
+            &tls_key_path,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to load TLS cert: {}", e))?;
 
-        // Create shutdown future that races signal/external/token cancel (fixes #73)
-        let graceful_shutdown = {
+        // axum-server uses an external Handle for graceful shutdown rather
+        // than the with_graceful_shutdown pattern axum::serve uses. We spawn
+        // a task that watches for the shutdown signal and triggers graceful
+        // shutdown via the handle when fired.
+        let server_handle = axum_server::Handle::new();
+        let shutdown_task = {
+            let handle = server_handle.clone();
             let token = shutdown_token.clone();
             let state = state_for_shutdown.clone();
-            async move {
+            tokio::spawn(async move {
                 shutdown_signal(external_shutdown).await;
 
-                // Cancel SSE streams BEFORE Axum starts waiting for connections
+                // Cancel SSE streams BEFORE the server stops accepting connections
                 token.cancel();
 
                 // Log active SSE connections for diagnostics
@@ -286,15 +307,20 @@ mod server {
                         active
                     );
                 }
-            }
+
+                // Tell axum-server to drain & stop within 5 s.
+                handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+            })
         };
 
-        axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(graceful_shutdown)
-        .await?;
+        axum_server::bind_rustls(addr, tls_config)
+            .handle(server_handle)
+            .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+            .await?;
+
+        // Shutdown task should have run by now; await it so any final
+        // logging completes before we tear adapters down.
+        let _ = shutdown_task.await;
 
         // Cleanup: publish ShuttingDown event and stop adapters
         tracing::info!("Shutting down adapters...");
@@ -381,6 +407,71 @@ fn setup_logging() -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard
 }
 
 // ===========================================================================
+// TLS — self-signed cert generation for HTTPS
+//
+// Browsers gate "powerful APIs" (microphone, clipboard, geolocation, etc.)
+// behind a secure context: HTTPS or localhost. To make the mic work when
+// accessing Roon AI from another PC over the LAN, we serve over HTTPS with
+// a self-signed cert generated at first launch and persisted to disk. The
+// SAN list covers localhost, the hostname, and all detected LAN IPs so the
+// cert is valid for whichever address the user types.
+//
+// First-visit cert warning per browser is expected; acceptance persists.
+// ===========================================================================
+
+#[cfg(feature = "server")]
+fn ensure_tls_certs() -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let certs_dir = roon_ai::config::get_data_dir().join("certs");
+    std::fs::create_dir_all(&certs_dir)?;
+    let cert_path = certs_dir.join("roon-ai.cert.pem");
+    let key_path = certs_dir.join("roon-ai.key.pem");
+
+    if cert_path.exists() && key_path.exists() {
+        tracing::info!("Reusing existing TLS cert at {}", cert_path.display());
+        return Ok((cert_path, key_path));
+    }
+
+    // Build SAN list. rcgen treats parseable IPs as IP entries and the rest
+    // as DNS entries automatically.
+    let mut sans: Vec<String> = vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ];
+
+    let hostname = gethostname::gethostname().to_string_lossy().to_string();
+    if !hostname.is_empty() && hostname.to_lowercase() != "localhost" {
+        sans.push(hostname.clone());
+        sans.push(format!("{}.local", hostname));
+    }
+
+    if let Ok(addrs) = if_addrs::get_if_addrs() {
+        for iface in addrs {
+            if !iface.is_loopback() {
+                let ip = iface.ip().to_string();
+                if !sans.contains(&ip) {
+                    sans.push(ip);
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "Generating self-signed TLS cert at {} (SAN: {:?})",
+        certs_dir.display(),
+        sans
+    );
+
+    let cert = rcgen::generate_simple_self_signed(sans)
+        .map_err(|e| anyhow::anyhow!("failed to generate self-signed cert: {}", e))?;
+
+    std::fs::write(&cert_path, cert.cert.pem())?;
+    std::fs::write(&key_path, cert.key_pair.serialize_pem())?;
+
+    Ok((cert_path, key_path))
+}
+
+// ===========================================================================
 // Windows-only: system tray icon with menu
 // ===========================================================================
 
@@ -440,7 +531,7 @@ fn run_tray(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> anyhow::Result<()>
             if menu_event.id == open_ui_id {
                 tracing::info!("Tray: Open Web UI");
                 let _ = std::process::Command::new("cmd")
-                    .args(["/c", "start", "", "http://localhost:8088"])
+                    .args(["/c", "start", "", "https://localhost:8088"])
                     .spawn();
             } else if menu_event.id == open_logs_id {
                 tracing::info!("Tray: Open Logs Folder ({})", logs_dir.display());
@@ -518,6 +609,21 @@ fn main() -> anyhow::Result<()> {
     // The guard keeps the non-blocking writer flushing; drop = drain & close.
     let _log_guard = setup_logging()?;
 
+    // Install rustls' CryptoProvider before any TLS work. Required since
+    // rustls 0.23 because both aws-lc-rs and ring end up in our dep tree
+    // (axum-server pulls in both transitively); rustls refuses to pick one
+    // automatically when multiple are available, so it panics on first use
+    // unless we install one explicitly here.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("failed to install rustls CryptoProvider"))?;
+
+    // Ensure TLS certs exist (generated on first launch, reused thereafter).
+    // Done synchronously before spawning the server thread so any cert
+    // failure surfaces fast and the tray icon never appears for a server
+    // that won't start.
+    let (tls_cert_path, tls_key_path) = ensure_tls_certs()?;
+
     // Channel: tray "Quit" → server graceful shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -530,7 +636,14 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(server::run(shutdown_rx))
+            // Surface server errors in the log file. With windows_subsystem="windows"
+            // there's no console, so unlogged errors are invisible; this also helps
+            // catch silent failures in the server thread when running with a tray.
+            let result = runtime.block_on(server::run(shutdown_rx, tls_cert_path, tls_key_path));
+            if let Err(e) = &result {
+                tracing::error!("server thread exited with error: {:#}", e);
+            }
+            result
         })?;
 
     // On Windows: run the tray icon event loop on the main thread.

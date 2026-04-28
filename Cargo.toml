@@ -1,6 +1,6 @@
 [package]
 name = "roon-ai"
-version = "3.4.0"  # CI overrides via ROON_AI_VERSION env var from git tag
+version = "3.5.0"  # CI overrides via ROON_AI_VERSION env var from git tag
 edition = "2021"
 authors = ["RooAI"]
 description = "Natural-language Roon control bridge with conversational AI agent and MCP server"
@@ -13,6 +13,8 @@ default = ["server"]
 server = [
     "dioxus/server",
     "dep:axum",
+    "dep:axum-server",
+    "dep:rustls",
     "dep:tokio",
     "dep:tower",
     "dep:tower-http",
@@ -25,6 +27,8 @@ server = [
     "dep:tokio-util",
     "dep:ssdp-client",
     "dep:gethostname",
+    "dep:if-addrs",
+    "dep:rcgen",
     "dep:rust-embed",
     "dep:mime_guess",
     "dep:http-body-util",
@@ -81,6 +85,16 @@ dioxus-primitives = { git = "https://github.com/DioxusLabs/components", version 
 
 # Web framework (server only)
 axum = { version = "0.8", features = ["macros"], optional = true }
+# HTTPS server backend with rustls (axum::serve has no TLS support).
+# Used to serve over HTTPS with a self-signed cert so the browser
+# microphone API works from non-localhost origins (mic requires a
+# secure context: HTTPS or localhost).
+axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
+# Direct rustls dep so we can install a CryptoProvider at startup.
+# Without this rustls 0.23+ panics with "no process-level CryptoProvider
+# available" when both aws-lc-rs and ring end up in the dep tree (which
+# they do via axum-server + its transitive deps).
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace"], optional = true }
@@ -112,6 +126,15 @@ tokio-util = { version = "0.7", optional = true }
 # SSDP/UPnP discovery (server only)
 ssdp-client = { version = "2", optional = true }
 gethostname = { version = "1.1.0", optional = true }
+
+# Network interface enumeration (server only) — used to populate self-signed
+# TLS cert SAN entries with the host's LAN IPs so mic works when accessing
+# the server over HTTPS from another PC on the network.
+if-addrs = { version = "0.13", optional = true }
+
+# Self-signed TLS certificate generation (server only) — generates a long-
+# lived cert at first launch, persisted to <data_dir>/certs/ for reuse.
+rcgen = { version = "0.13", optional = true }
 
 # Embedded assets for single-binary distribution (server only, ADR 002)
 rust-embed = { version = "8", optional = true }
