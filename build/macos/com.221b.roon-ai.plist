@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cloudatlas.unified-hifi-control</string>
+    <string>com.221b.roon-ai</string>
 
     <!-- Run as non-root user for security -->
     <key>UserName</key>
@@ -13,7 +13,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/unified-hifi-control</string>
+        <string>/usr/local/bin/roon-ai</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -23,20 +23,20 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/usr/local/var/log/unified-hifi-control.log</string>
+    <string>/usr/local/var/log/roon-ai.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/usr/local/var/log/unified-hifi-control.log</string>
+    <string>/usr/local/var/log/roon-ai.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PORT</key>
         <string>8088</string>
         <key>CONFIG_DIR</key>
-        <string>/usr/local/var/unified-hifi-control</string>
+        <string>/usr/local/var/roon-ai</string>
     </dict>
 
     <key>WorkingDirectory</key>
-    <string>/usr/local/var/unified-hifi-control</string>
+    <string>/usr/local/var/roon-ai</string>
 </dict>
 </plist>

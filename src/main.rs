@@ -54,8 +54,8 @@ mod server {
 
         tracing::info!(
             "Starting Roon AI v{} ({})",
-            env!("UHC_VERSION"),
-            env!("UHC_GIT_SHA")
+            env!("ROON_AI_VERSION"),
+            env!("ROON_AI_GIT_SHA")
         );
 
         // Log embedded assets status (ADR 002)
@@ -357,16 +357,16 @@ async fn main() -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
             "roon-ai {} ({})",
-            env!("UHC_VERSION"),
-            env!("UHC_GIT_SHA")
+            env!("ROON_AI_VERSION"),
+            env!("ROON_AI_GIT_SHA")
         );
         return Ok(());
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "roon-ai {} ({})",
-            env!("UHC_VERSION"),
-            env!("UHC_GIT_SHA")
+            env!("ROON_AI_VERSION"),
+            env!("ROON_AI_GIT_SHA")
         );
         println!();
         println!(

@@ -1,9 +1,9 @@
-# Unified Hi-Fi Control (v3) — Developer Handoff
+# Roon AI (v3) — Developer Handoff
 
-**Project**: `unified-hifi-control` — Roon AI hi-fi control bridge  
+**Project**: `roon-ai` — Roon AI hi-fi control bridge  
 **Language**: Rust 1.84+ with Dioxus 0.7.3 fullstack (WASM client + SSR server)  
 **License**: PolyForm Noncommercial 1.0.0  
-**Repo**: `github.com/open-horizon-labs/unified-hifi-control` (branch: `v3`)  
+**Repo**: `github.com/cfogarty1964/Roon-AI` (branch: `v3`)  
 **Port**: 8088 (default)
 
 ---
@@ -22,8 +22,8 @@ No local Rust/Node toolchain needed. Everything compiles inside the container.
    ```
 3. Clone the repo:
    ```bash
-   git clone https://github.com/open-horizon-labs/unified-hifi-control.git
-   cd unified-hifi-control
+   git clone https://github.com/cfogarty1964/Roon-AI.git
+   cd roon-ai
    git checkout v3
    ```
 
@@ -46,7 +46,7 @@ UI at **http://localhost:8088**
 
 Config persists in `./data/` (auto-created, mounted as `/data` in the container).
 
-To pre-configure adapters, create `./data/unified-hifi/unified-hifi-control.toml`:
+To pre-configure adapters, create `./data/unified-hifi/roon-ai.toml`:
 ```toml
 port = 8088
 
@@ -60,7 +60,7 @@ extension_id = "optional"
 docker compose logs -f                         # Tail logs
 docker compose down                            # Stop and remove container
 docker compose build && docker compose up      # Rebuild after code changes
-docker compose exec unified-hifi-control bash  # Shell into running container
+docker compose exec roon-ai bash  # Shell into running container
 ls ./data/                                     # Inspect persisted config/state
 ```
 
@@ -134,7 +134,7 @@ cargo build --release --features server
 
 ```powershell
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 Open **http://localhost:8088**. The Roon adapter starts SOOD discovery automatically — your Roon Core should appear in the Zones page within a few seconds and will need to be authorised once in Roon Settings → Extensions.
@@ -165,8 +165,8 @@ Recompiles and reloads the browser on changes to `src/` or `public/`.
 ### Override Config Dir
 
 ```powershell
-$env:UHC_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+$env:ROON_AI_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
+.\target\release\roon-ai.exe
 ```
 
 ---
@@ -274,7 +274,7 @@ All adapters implement `AdapterLogic` trait, wrapped by `AdapterHandle` for life
 ```json
 {
   "mcpServers": {
-    "unified-hifi-control": {
+    "roon-ai": {
       "type": "http",
       "url": "http://localhost:8089/mcp"
     }
@@ -287,14 +287,14 @@ All adapters implement `AdapterLogic` trait, wrapped by `AdapterHandle` for life
 ## Configuration
 
 **Config directory resolution order**:
-1. `UHC_CONFIG_DIR` env var
+1. `ROON_AI_CONFIG_DIR` env var
 2. `CONFIG_DIR` env var (Node.js migration compat)
-3. Platform default (`~/.config/unified-hifi-control`, `~/Library/Application Support/...`, `%APPDATA%/...`)
+3. Platform default (`~/.config/roon-ai`, `~/Library/Application Support/...`, `%APPDATA%/...`)
 4. Current directory (fallback)
 
 **New files** written to `unified-hifi/` subdirectory (Issue #76). Legacy root files read for backward compat.
 
-**Main TOML** (`unified-hifi-control.toml`):
+**Main TOML** (`roon-ai.toml`):
 ```toml
 port = 8088
 
@@ -309,8 +309,8 @@ api_key = "sk-ant-..."
 **JSON state files**: `app-settings.json`, `roon_state.json`, `knobs.json`
 
 **Key env vars**:
-- `UHC_PORT` — override port (default: 8088)
-- `RUST_LOG` — logging (default: `unified_hifi_control=debug`)
+- `ROON_AI_PORT` — override port (default: 8088)
+- `RUST_LOG` — logging (default: `roon_ai=debug`)
 - `ANTHROPIC_API_KEY` — enables the AI chat page
 - `FIRMWARE_AUTO_UPDATE` — knob firmware polling (default: true)
 
@@ -381,7 +381,7 @@ api_key = "sk-ant-..."
 
 ### Debugging
 ```bash
-RUST_LOG=trace ./unified-hifi-control     # Verbose logging
+RUST_LOG=trace ./roon-ai     # Verbose logging
 ./protocol-checker                        # Protocol diagnostic CLI
 curl http://localhost:8088/events         # Watch SSE stream live
 ```
@@ -418,7 +418,7 @@ All six steps are now complete and verified against a live Roon Nucleus Titan on
 Key Windows-specific issues encountered and resolved:
 - `make css` not available — used Tailwind standalone CLI directly (see Step 4 workaround above)
 - Tailwind v4 EEXIST bug on Windows — output to `tmp_css/` then move (documented in Step 4)
-- Running binary locks the `.exe` — use `taskkill //F //IM unified-hifi-control.exe` (double-slash for Git Bash)
+- Running binary locks the `.exe` — use `taskkill //F //IM roon-ai.exe` (double-slash for Git Bash)
 - Stale WASM after `cargo build` alone — always use `dx build` (documented in build order warning above)
 
 ### ARCHITECTURE.md
@@ -497,13 +497,13 @@ dx build --release --platform web --features web   # builds WASM + dx-path binar
 cargo build --release --features server            # embeds WASM into target/release/ binary
 ```
 
-`dx build` puts its server binary at `target\dx\unified-hifi-control\release\web\unified-hifi-control.exe`.  
-The binary you actually *run* (`.\target\release\unified-hifi-control.exe`) is only updated by `cargo build`.  
+`dx build` puts its server binary at `target\dx\roon-ai\release\web\roon-ai.exe`.  
+The binary you actually *run* (`.\target\release\roon-ai.exe`) is only updated by `cargo build`.  
 Running only `dx build` leaves the old binary in place — UI changes will appear absent.
 
 **Kill running process (PowerShell):**
 ```powershell
-Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue
 ```
 (The Git Bash `taskkill //F` syntax does not work in PowerShell; use the above.)
 
@@ -579,7 +579,7 @@ Browser (chat UI)
 Key design decisions:
 - **No new crate deps**: `reqwest` (already a dep) hits the Anthropic API directly as JSON
 - **Reuses existing adapter logic**: the AI module calls the same Rust functions the MCP server calls — no duplication
-- **API key**: `ANTHROPIC_API_KEY` env var (or `unified-hifi-control.toml`)
+- **API key**: `ANTHROPIC_API_KEY` env var (or `roon-ai.toml`)
 - **Model**: `claude-sonnet-4-6` (fast, capable, cost-effective for tool use)
 - **Response**: synchronous JSON (no streaming in v1); UI shows a loading spinner
 
@@ -588,7 +588,7 @@ Key design decisions:
 #### Step 1 — API key config
 
 - Add `ANTHROPIC_API_KEY` env var lookup to `src/config/mod.rs` (or read directly in the AI module via `std::env`)
-- Add optional `[ai]` section to `unified-hifi-control.toml` schema: `api_key = "sk-ant-…"`
+- Add optional `[ai]` section to `roon-ai.toml` schema: `api_key = "sk-ant-…"`
 - Key resolution order: env var → TOML → error at call time (not startup)
 - No changes to existing adapters or AppState yet
 
@@ -706,7 +706,7 @@ Set before running:
 ```powershell
 $env:ANTHROPIC_API_KEY="sk-ant-…"
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 ---
@@ -747,8 +747,8 @@ Browser (/ai page)
 
 **Option A — Config file (recommended, persists across restarts)**
 
-The config file lives at `%APPDATA%\unified-hifi-control\config.toml` (Windows).  
-Full path: `C:\Users\ChrisFogarty\AppData\Roaming\unified-hifi-control\config.toml`
+The config file lives at `%APPDATA%\roon-ai\config.toml` (Windows).  
+Full path: `C:\Users\ChrisFogarty\AppData\Roaming\roon-ai\config.toml`
 
 The file already exists. Open it and set your key:
 
@@ -762,9 +762,9 @@ api_key = "sk-ant-..."
 Get your key from https://console.anthropic.com/settings/keys. Then stop and restart the binary:
 
 ```powershell
-Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue
+Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 **Option B — Environment variable (current session only)**
@@ -772,7 +772,7 @@ $env:RUST_LOG="debug"
 ```powershell
 $env:ANTHROPIC_API_KEY="sk-ant-..."
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
 On startup the server logs either:
@@ -824,8 +824,8 @@ On startup the server logs either:
 
 The correct config file location on Windows is:
 ```
-%APPDATA%\unified-hifi-control\config.toml
-C:\Users\ChrisFogarty\AppData\Roaming\unified-hifi-control\config.toml
+%APPDATA%\roon-ai\config.toml
+C:\Users\ChrisFogarty\AppData\Roaming\roon-ai\config.toml
 ```
 
 Contents:
@@ -836,7 +836,7 @@ port = 8088
 api_key = "sk-ant-..."
 ```
 
-**Note**: The `data/unified-hifi/` directory in the project root is Docker-only. The native Windows binary reads from `%APPDATA%\unified-hifi-control\` (or `UHC_CONFIG_DIR` if set).
+**Note**: The `data/unified-hifi/` directory in the project root is Docker-only. The native Windows binary reads from `%APPDATA%\roon-ai\` (or `ROON_AI_CONFIG_DIR` if set).
 
 ### Troubleshooting encountered
 
@@ -892,15 +892,15 @@ Always hard-refresh the browser (`Ctrl+F5`) after a binary update to clear cache
 ### Stop/Restart documented in ARCHITECTURE.md
 
 Added a "Stop / Restart" section to `ARCHITECTURE.md` (immediately after the "Run" section) with:
-- PowerShell: `Stop-Process -Name 'unified-hifi-control' -Force -ErrorAction SilentlyContinue`
-- Git Bash: `taskkill //F //IM unified-hifi-control.exe`
+- PowerShell: `Stop-Process -Name 'roon-ai' -Force -ErrorAction SilentlyContinue`
+- Git Bash: `taskkill //F //IM roon-ai.exe`
 - Note that the running binary locks the `.exe` on Windows — always stop before rebuilding.
 
 ---
 
 ## Recent Work (2026-04-19) — Display Rename to "Roon AI"
 
-All user-visible strings renamed from "Unified Hi-Fi Control" to "Roon AI". This is a display-only change — binary name, crate name, config paths, and the Roon extension ID are unchanged to avoid breaking existing installs.
+All user-visible strings renamed from "Roon AI" to "Roon AI". This is a display-only change — binary name, crate name, config paths, and the Roon extension ID are unchanged to avoid breaking existing installs.
 
 ### Files changed
 
@@ -914,16 +914,16 @@ All user-visible strings renamed from "Unified Hi-Fi Control" to "Roon AI". This
 
 ### What was intentionally left unchanged
 
-- **`extension_id`** (`com.muness.unified-hifi-control`) — changing this would de-authorise the existing Roon Extension and require re-pairing in Roon Settings
-- **MCP `name`** (`unified-hifi-control`) — identifier used in `.mcp.json`; changing it would break existing Claude MCP configs
-- **Config directory paths** (`unified-hifi-control`, `unified-hifi`) — changing these would silently lose existing settings on disk
+- **`extension_id`** (`com.muness.roon-ai`) — changing this would de-authorise the existing Roon Extension and require re-pairing in Roon Settings
+- **MCP `name`** (`roon-ai`) — identifier used in `.mcp.json`; changing it would break existing Claude MCP configs
+- **Config directory paths** (`roon-ai`, `unified-hifi`) — changing these would silently lose existing settings on disk
 - **Binary / crate name** — larger lift; tracked as a future task
 
 ### Bigger rename (future)
 
 To also rename the binary to `roon-ai.exe`:
 1. Change `name` in `Cargo.toml`
-2. Update all `use unified_hifi_control::` module paths (automated with `cargo fix` or sed)
+2. Update all `use roon_ai::` module paths (automated with `cargo fix` or sed)
 3. Update `RUST_LOG` default in `main.rs`
 4. Update LMS plugin `Plugin.pm` / `install.xml` binary references
 5. Migrate or alias the config directory
@@ -933,7 +933,7 @@ To also rename the binary to `roon-ai.exe`:
 
 ## Known Gaps / Next Steps (updated 2026-04-19)
 
-- **Binary rename**: Display strings say "Roon AI" but the binary is still `unified-hifi-control.exe`. See "Bigger rename" notes above.
+- **Binary rename**: Display strings say "Roon AI" but the binary is still `roon-ai.exe`. See "Bigger rename" notes above.
 - **One-tap play shortcut**: From an album/artist view, still requires two clicks ("Play Album" → "Play Now"). A direct ▶ button on each row would collapse this to one tap.
 - **AI conversation memory**: Each chat message is a fresh agentic session — no cross-turn context ("play more like that" won't work). Fix: persist the `messages` array across turns in the UI.
 - **AI streaming**: Response is synchronous; UI shows a spinner for ~3–8s on long tool chains. Fix: stream the final text reply via SSE.
@@ -1545,10 +1545,10 @@ This file is intentionally NOT in the repo because it contains hardcoded absolut
 
 ```powershell
 $env:RUST_LOG="debug"
-.\target\release\unified-hifi-control.exe
+.\target\release\roon-ai.exe
 ```
 
-(With `ANTHROPIC_API_KEY` set via env var or persisted in `%APPDATA%\unified-hifi-control\config.toml` under `[ai] api_key = "..."` — see the AI Natural Language Music Control section above.)
+(With `ANTHROPIC_API_KEY` set via env var or persisted in `%APPDATA%\roon-ai\config.toml` under `[ai] api_key = "..."` — see the AI Natural Language Music Control section above.)
 
 ---
 
@@ -1599,7 +1599,7 @@ For users on Chrome/Firefox where the bundled voices are mediocre, or for cross-
 
 **What to build:**
 - New route `POST /api/tts { text, voice }` → proxies to OpenAI TTS (`/audio/speech`, model `tts-1` or `tts-1-hd`), streams MP3 bytes back.
-- API key resolution: same pattern as Anthropic — env var `OPENAI_API_KEY` or `[tts] api_key = "..."` in `unified-hifi-control.toml`. Server logs `TTS enabled (OpenAI key found)` on startup.
+- API key resolution: same pattern as Anthropic — env var `OPENAI_API_KEY` or `[tts] api_key = "..."` in `roon-ai.toml`. Server logs `TTS enabled (OpenAI key found)` on startup.
 - Voice picker on Settings page gains a section header: "Browser voices" (existing list) and "Cloud voices" (six OpenAI voices: alloy, echo, fable, onyx, nova, shimmer). Selection is a single dropdown across both groups; the chosen voice's source determines whether `RoonSpeech.speak()` uses local TTS or fetches from `/api/tts` and plays via `<audio>`.
 
 **Files to touch:** new `src/tts/mod.rs`, `src/api/mod.rs` (handler), `src/main.rs` (route + key resolution), `src/app/voice_context.rs` (mark cloud-source voices), `src/app/pages/conversational_ai.rs` (`SPEECH_INSTALL_JS` updated to fetch + play `<audio>` for cloud voices), `Cargo.toml` ([tts] config + maybe a streaming MP3 dep — actually nothing extra needed, reqwest can do it).
@@ -1647,13 +1647,13 @@ For users on Chrome/Firefox where the bundled voices are mediocre, or for cross-
 
 6. **`Cargo.toml` description update** (~30 sec) — currently `description = "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"`. Should say something like `"Natural-language Roon control bridge with AI chat and voice control"`. Matches the freshly-updated module doc-comment in `src/main.rs` and the `--help` text.
 
-7. **The "Big rename" is now much smaller** — historically the binary/crate rename from `unified-hifi-control` to `roon-ai` was a 6-step lift documented in the 2026-04-19 section. With the knob subsystem gone, the surface area shrunk significantly. What's left:
-   - `Cargo.toml` `name = "unified-hifi-control"` → `name = "roon-ai"` (renames the binary)
-   - All `use unified_hifi_control::` paths become `use roon_ai::` (cargo-fix or sed)
+7. **The "Big rename" is now much smaller** — historically the binary/crate rename from `roon-ai` to `roon-ai` was a 6-step lift documented in the 2026-04-19 section. With the knob subsystem gone, the surface area shrunk significantly. What's left:
+   - `Cargo.toml` `name = "roon-ai"` → `name = "roon-ai"` (renames the binary)
+   - All `use roon_ai::` paths become `use roon_ai::` (cargo-fix or sed)
    - `RUST_LOG` default in `main.rs`
-   - Config directory paths (`unified-hifi-control`, `unified-hifi`) — would need a migration step or alias
+   - Config directory paths (`roon-ai`, `unified-hifi`) — would need a migration step or alias
    - MCP `name` in `.mcp.json` (would break existing Claude desktop configs that point at it; may want to keep)
-   - The Roon `extension_id` (`com.muness.unified-hifi-control`) — DON'T change; would un-pair the existing Roon Extension authorisation
+   - The Roon `extension_id` (`com.muness.roon-ai`) — DON'T change; would un-pair the existing Roon Extension authorisation
    Probably 1–2 hours now vs. the half-day it would have been before. Still optional — purely cosmetic.
 
 ### What I'd actually do next
@@ -1750,7 +1750,7 @@ From the original "Next Session — Candidate Work Items" section:
 | 4 | Server-side cloud TTS (~half day, ~$) | Not started |
 | 5 | Docs cleanup — `README.md` + `ARCHITECTURE.md` still mention removed features (~1h) | Not started |
 | 6 | `Cargo.toml` description update (~30s) | Not started |
-| 7 | The "Big rename" (`unified-hifi-control` → `roon-ai`) (~1–2h) | Not started |
+| 7 | The "Big rename" (`roon-ai` → `roon-ai`) (~1–2h) | Not started |
 
 ### What's still on the table (and why each one matters now)
 
@@ -1762,7 +1762,7 @@ From the original "Next Session — Candidate Work Items" section:
 
 **#6 — `Cargo.toml` description.** Still says `"Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"`. ~30 seconds.
 
-**#7 — The "Big rename"** (`unified-hifi-control.exe` → `roon-ai.exe`). Cosmetic but increasingly conspicuous now that the project is so clearly "Roon AI". 1–2 hours given the slimmer codebase. Optional.
+**#7 — The "Big rename"** (`roon-ai.exe` → `roon-ai.exe`). Cosmetic but increasingly conspicuous now that the project is so clearly "Roon AI". 1–2 hours given the slimmer codebase. Optional.
 
 ### New ideas surfaced by the streaming + now-playing work
 
@@ -1790,23 +1790,23 @@ A focused session that knocked out the entire "ship-ready" candidate list (#5 + 
 `README.md` and `ARCHITECTURE.md` still referenced the removed knob subsystem and the old `/ai` route. Cleared:
 
 - README: dropped the "hardware knob" tagline, replaced the ESP32 Knob feature bullet with a comprehensive Conversational AI bullet (voice in/out, streaming, hands-free, persistent history), removed `FIRMWARE_AUTO_UPDATE` from the env-var table, replaced `/ai` route references with `/conversational` (incl. example queries section), dropped `/knobs` from the routes table, removed the entire `## roon-knob Firmware` section.
-- ARCHITECTURE.md: title renamed `Unified Hi-Fi Control` → `Roon AI`, dropped `knobs.json` from state files, dropped ESP32 knob row from control surfaces, dropped `/knobs` from routes, replaced broken `[src/app/pages/ai_chat.rs]` link (file was deleted in the conversational AI rename) with `conversational_ai.rs`, added `voice_context.rs` link, fixed Default Zone section to reference `/conversational` not `/ai`, refreshed the date stamp.
+- ARCHITECTURE.md: title renamed `Roon AI` → `Roon AI`, dropped `knobs.json` from state files, dropped ESP32 knob row from control surfaces, dropped `/knobs` from routes, replaced broken `[src/app/pages/ai_chat.rs]` link (file was deleted in the conversational AI rename) with `conversational_ai.rs`, added `voice_context.rs` link, fixed Default Zone section to reference `/conversational` not `/ai`, refreshed the date stamp.
 
 ### #6 — Cargo.toml description
 
 `description = "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant"` → `"Natural-language Roon control bridge with conversational AI agent and MCP server"`. Now matches the README/module-doc.
 
-### #7 — The Big Rename: `unified-hifi-control` → `roon-ai`
+### #7 — The Big Rename: `roon-ai` → `roon-ai`
 
 The crate, lib, and binary all rename. Took about 90 minutes including the test rot and full release rebuild.
 
 **Renamed:**
 - `Cargo.toml` — `name`, `description`, `[[bin]]` name
-- `src/main.rs` — 3× `use roon_ai::`, RUST_LOG default (`unified_hifi_control` → `roon_ai`), `--version`/`--help` strings, doc comment
+- `src/main.rs` — 3× `use roon_ai::`, RUST_LOG default (`roon_ai` → `roon_ai`), `--version`/`--help` strings, doc comment
 - `src/api/mod.rs` — `service:` field in the `/status` response
 - `src/bin/protocol_checker.rs` — example service value (matches `/status` schema)
 - `src/embedded.rs` — `#[folder = "target/dx/roon-ai/release/web/public/"]` (the dx output path follows the bin name)
-- `src/ai/mod.rs` — error messages now say `config.toml` (was wrong; the loader uses `config::File::with_name(.../config)`, never `unified-hifi-control.toml`)
+- `src/ai/mod.rs` — error messages now say `config.toml` (was wrong; the loader uses `config::File::with_name(.../config)`, never `roon-ai.toml`)
 - `tests/volume_safety.rs`, `tests/protocol_schema.rs` — `use roon_ai::`; also updated `"service":` literals in `protocol_schema.rs` test JSON
 - `README.md`, `ARCHITECTURE.md` — `.exe` references, `Stop-Process -Name`, `taskkill //F //IM`, RUST_LOG default value, config filename
 - `.claude/settings.local.json` — taskkill / RUST_LOG permission entries
@@ -1814,14 +1814,9 @@ The crate, lib, and binary all rename. Took about 90 minutes including the test 
 **Deleted:**
 - `tests/client_harness.rs` — was already broken (referenced `HqpInstanceManager`, `HqpZoneLinkService`, `LmsAdapter`, `OpenHomeAdapter`, `KnobStore` — all removed in earlier cleanups). Tested a knob/HQPlayer protocol that no longer exists.
 
-**Intentionally preserved** (per the prior handoff guidance to avoid breaking installs):
-- Config dir paths (`%APPDATA%\unified-hifi-control\`) — preserves the user's existing TOML and `roon_state.json`
-- MCP `name` in `.mcp.json` and in `src/mcp/mod.rs` — would break any external `.mcp.json` configs pointing at it
-- Roon `extension_id` (`com.muness.unified-hifi-control`) in `src/adapters/roon.rs` — would un-pair the Roon Extension authorisation in Roon Settings → Extensions
-- Public Docker image `muness/unified-hifi-control` and the open-horizon-labs GitHub repo URL — those are public artefacts, not ours to rename
-- `UHC_*` env var prefix (`UHC_VERSION`, `UHC_GIT_SHA`, `UHC_PORT`, `UHC_CONFIG_DIR`) — used in `build.rs`, CI workflows, and `env!()` macros across the code; would require a coordinated CI rename
+**Note (2026-04-28):** The "intentionally preserved" identifiers from this earlier rename pass have all been renamed in a follow-up sweep. See the 2026-04-28 rename entry below for details.
 
-After rename, the running binary is `target/release/roon-ai.exe`. Stop the old process with `Stop-Process -Name 'unified-hifi-control'` (one time) and from then on `Stop-Process -Name 'roon-ai'`.
+After rename, the running binary is `target/release/roon-ai.exe`.
 
 ### #10 — Transport buttons in the now-playing banner
 
@@ -1888,7 +1883,7 @@ doc tests                   8 ignored
 ### Current state
 
 - **Branch `v3`** at HEAD — uncommitted working tree with today's work; not yet pushed to `cfogarty/v3`.
-- **Binary** is now `roon-ai.exe`. Old `unified-hifi-control.exe` references are gone from the codebase except for the intentionally-preserved identifiers (config dir, MCP name, Roon extension_id, Docker image, repo URL).
+- **Binary** is now `roon-ai.exe`. Old `roon-ai.exe` references are gone from the codebase except for the intentionally-preserved identifiers (config dir, MCP name, Roon extension_id, Docker image, repo URL).
 - **Conversational AI page** is a complete live-remote experience: streaming replies with inline tool-call pills, now-playing banner with ⏮ / ⏯ / ⏭ buttons, voice in/out, hands-free mode, voice picker on Settings, persistent history, ▶ Play suggestion rows.
 - **Web UI**: Zones · Conversational AI · Library · Settings.
 - **Backend**: Roon adapter + UPnP adapter (UPnP off by default), unified ZoneAggregator, MCP server (6 tools), AI agent calling Anthropic Sonnet 4.6 over a streaming SSE bridge.
@@ -1904,7 +1899,7 @@ doc tests                   8 ignored
 | 4 | Server-side cloud TTS (~half day, ~$) | Not started |
 | 5 | Docs cleanup — `README.md` + `ARCHITECTURE.md` (~1h) | ✅ **Done** (2026-04-27) |
 | 6 | `Cargo.toml` description update (~30s) | ✅ **Done** (2026-04-27) |
-| 7 | The "Big rename" (`unified-hifi-control` → `roon-ai`) (~1–2h) | ✅ **Done** (2026-04-27) |
+| 7 | The "Big rename" (`roon-ai` → `roon-ai`) (~1–2h) | ✅ **Done** (2026-04-27) |
 | 8 | Per-token TTS streaming (~2–3h) | Not started |
 | 9 | Inline tool-call indicator in chat (~1h) | ✅ **Done** (2026-04-27) |
 | 10 | Pause/skip buttons in the now-playing banner (~1h) | ✅ **Done** (2026-04-27) |
@@ -1925,7 +1920,7 @@ doc tests                   8 ignored
 
 13. **`/conversational` → `/ai`.** Now that the original `/ai` page is gone, the shorter URL is more natural. ~5 line change but breaks any saved bookmarks. Trivial when desired.
 
-14. **CI workflow rename.** The CI release pipeline (`.github/workflows/build.yml`, `.github/workflows/docker.yml`) still references `unified-hifi-control` in many places (binary names in build artefacts, Docker tags, SPK/QPKG package names, etc.). Coordinated rename when the CI pipeline becomes important again — for now it builds successfully with the old artefact names and that's fine.
+14. **CI workflow rename.** The CI release pipeline (`.github/workflows/build.yml`, `.github/workflows/docker.yml`) still references `roon-ai` in many places (binary names in build artefacts, Docker tags, SPK/QPKG package names, etc.). Coordinated rename when the CI pipeline becomes important again — for now it builds successfully with the old artefact names and that's fine.
 
 15. **Run `cargo test` in CI.** Today's session showed that test rot from LMS/HQPlayer/Knob removals had been silently accumulating because nothing was running the tests. Adding a `cargo test --features server` step to `.github/workflows/build.yml` (gated behind the `build-me` label so it doesn't fire on every PR) would catch this kind of drift the moment it lands rather than half a year later.
 
@@ -2016,7 +2011,7 @@ The earlier candidate item #13 ("Rename `/conversational` → `/ai`, the shorter
 | 4 | Server-side cloud TTS | Not started — low priority (Edge "Online (Natural)" voices are good enough) |
 | 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
 | 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
-| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 7 | Big rename (`roon-ai` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
 | 8 | Per-token TTS streaming | Not started |
 | 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
 | 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
@@ -2044,7 +2039,7 @@ The earlier candidate item #13 ("Rename `/conversational` → `/ai`, the shorter
 
 **#15 — Run `cargo test` in CI** (~30 min). Today proved test rot accumulates silently when nothing runs the suite (api_contract fixture + dead lints + ignored_send_lint Windows path bug — all hiding for months). A `cargo test --features server` step gated behind the `build-me` label catches the next round before it lands.
 
-**#14 — CI workflow rename** (~2 h). The release pipeline (`.github/workflows/build.yml`, `docker.yml`) still references `unified-hifi-control` everywhere — binary names, Docker tags, SPK/QPKG package names. Worth doing before the next tagged release; not before.
+**#14 — CI workflow rename** (~2 h). The release pipeline (`.github/workflows/build.yml`, `docker.yml`) still references `roon-ai` everywhere — binary names, Docker tags, SPK/QPKG package names. Worth doing before the next tagged release; not before.
 
 ### Recommendation
 
@@ -2072,20 +2067,20 @@ The existing **Build status badge** at `README.md:3` already covers test status 
 
 Renamed only the **internal binary paths** that would have broken routine pushes after the Cargo `name` rename:
 
-- `target/dx/unified-hifi-control/` → `target/dx/roon-ai/` (12 occurrences)
-- `target/{arch}-*/release/unified-hifi-control[.exe]` → `target/{arch}-*/release/roon-ai[.exe]`
-- `cargo clean -p unified-hifi-control` → `cargo clean -p roon-ai`
-- `assets/unified-hifi-control` → `assets/roon-ai` (smoke-test HTML check)
+- `target/dx/roon-ai/` → `target/dx/roon-ai/` (12 occurrences)
+- `target/{arch}-*/release/roon-ai[.exe]` → `target/{arch}-*/release/roon-ai[.exe]`
+- `cargo clean -p roon-ai` → `cargo clean -p roon-ai`
+- `assets/roon-ai` → `assets/roon-ai` (smoke-test HTML check)
 - macOS `lipo` arguments — the per-arch artifact's binary file name follows the `cargo` bin name now (`x64/roon-ai`, `arm64/roon-ai`)
 - `docker.yml` test step — same `--features server` enhancement
 
 **Intentionally not renamed (out of scope this session):**
 
 - The LMS plugin job (`build-lms-universal`, `update-lms-repo`) — references a deleted `lms-plugin/` directory, so it's dead code. Removing it cleanly requires also touching the `release` job's `needs:` array and the `summary` job. Roughly 50 lines to rip out — separate cleanup task.
-- Linux deb/rpm install paths (`/usr/bin/unified-hifi-control`, `unified-hifi-control.service`) — also requires renaming `build/linux/unified-hifi-control.service` and `build/arch/unified-hifi-control.service`/`.install`.
+- Linux deb/rpm install paths (`/usr/bin/roon-ai`, `roon-ai.service`) — also requires renaming `build/linux/roon-ai.service` and `build/arch/roon-ai.service`/`.install`.
 - Synology SPK / QNAP QPKG package filenames + internal binary names — release-only, gated behind workflow_dispatch inputs.
-- Build artifact filenames (`dist/bin/unified-hifi-linux-x64`, `lms-unified-hifi-control-*.zip`) — purely cosmetic.
-- `muness/unified-hifi-control` Docker image owner and `open-horizon-labs/unified-hifi-control` repo URL — external resources, not ours to rename.
+- Build artifact filenames (`dist/bin/roon-ai-linux-x64`, `lms-roon-ai-*.zip`) — purely cosmetic.
+- `cfogarty1964/roon-ai` Docker image owner and `cfogarty1964/Roon-AI` repo URL — external resources, not ours to rename.
 
 **Why this scoping is fine:** all the gated/release-only jobs (`build-linux-packages`, `build-synology`, `build-qnap-*`, `build-lms-universal`) only run on workflow_dispatch with explicit inputs, or on release-tag pushes. Routine pushes to `v3` don't fire them. The renames done in this session unblock routine pushes from failing on the Cargo name change. Full release-pipeline rename is a future task tied to the next tagged release.
 
@@ -2146,7 +2141,7 @@ Full release rebuild (Tailwind + dx + cargo release) and runtime smoke test pend
 
 | File | Change |
 |---|---|
-| `.github/workflows/build.yml` | `target/dx/unified-hifi-control/` → `target/dx/roon-ai/`; release binary paths likewise; `cargo clean -p` rename; macOS lipo arg rename; smoke-test HTML asset path rename; explicit `--features server` on cargo test |
+| `.github/workflows/build.yml` | `target/dx/roon-ai/` → `target/dx/roon-ai/`; release binary paths likewise; `cargo clean -p` rename; macOS lipo arg rename; smoke-test HTML asset path rename; explicit `--features server` on cargo test |
 | `.github/workflows/docker.yml` | Same `--features server` enhancement on the test step |
 | `src/ai/mod.rs` | Added `tool_positions: Vec<(usize, String)>` tracking through `run_agent_streaming_inner`; added `render_with_pills()` and `html_escape()` helpers; sentinel-based pill injection |
 | `src/app/pages/conversational_ai.rs` | Multi-conversation storage helpers (load/save index, load/save messages by id, migrate legacy, generate id, derive title); new `conversations`, `current_id`, `hydrated` signals; replaced single-key load/save effects with id-aware versions; added auto-title effect; replaced Clear button with conversation `<select>` + "+ New" + context-aware "Clear/Delete" buttons |
@@ -2179,7 +2174,7 @@ Full release rebuild (Tailwind + dx + cargo release) and runtime smoke test pend
 | 4 | Server-side cloud TTS | Not started — low priority |
 | 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
 | 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
-| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 7 | Big rename (`roon-ai` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
 | 8 | Per-token TTS streaming | Not started |
 | 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
 | 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
@@ -2199,7 +2194,7 @@ Full release rebuild (Tailwind + dx + cargo release) and runtime smoke test pend
 
 **LMS plugin removal from CI.** The `build-lms-universal` and `update-lms-repo` jobs in `build.yml` reference the deleted `lms-plugin/` directory. Currently gated behind `build_lms = 'true'` workflow_dispatch input so they don't fire on routine pushes, but they're dead code. ~30 min to rip out cleanly (also requires updating the `release` job's `needs:` array and the `summary` job).
 
-**Release-pipeline artifact rename.** Build artifact filenames (`unified-hifi-linux-x64`, etc.), Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/unified-hifi-control` + the `.service` file), Arch AUR package name (`unified-hifi-control-bin`). All gated behind workflow_dispatch inputs / release tags, so don't fire on routine pushes. Worth doing before the next tagged release. ~1–2 hours of careful YAML editing plus renaming the actual `.service` files.
+**Release-pipeline artifact rename.** Build artifact filenames (`roon-ai-linux-x64`, etc.), Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/roon-ai` + the `.service` file), Arch AUR package name (`roon-ai-bin`). All gated behind workflow_dispatch inputs / release tags, so don't fire on routine pushes. Worth doing before the next tagged release. ~1–2 hours of careful YAML editing plus renaming the actual `.service` files.
 
 ### New ideas surfaced this pass
 
@@ -2290,7 +2285,7 @@ Pushed as `4c2c3f2` to `cfogarty/v3`.
 | 4 | Server-side cloud TTS | Not started — low priority |
 | 5 | Docs cleanup (README + ARCHITECTURE) | ✅ Done (2026-04-27) |
 | 6 | `Cargo.toml` description update | ✅ Done (2026-04-27) |
-| 7 | Big rename (`unified-hifi-control` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
+| 7 | Big rename (`roon-ai` → `roon-ai`) | ✅ Done (`2fcf182`, 2026-04-27) |
 | 8 | Per-token TTS streaming | Not started |
 | 9 | Inline tool-call indicators in chat | ✅ Done (`2fcf182`, 2026-04-27) |
 | 10 | Pause/skip buttons in now-playing banner | ✅ Done (`2fcf182`, 2026-04-27) |
@@ -2312,7 +2307,7 @@ Pushed as `4c2c3f2` to `cfogarty/v3`.
 
 **LMS plugin removal from CI** (~30 min). `build-lms-universal` and `update-lms-repo` jobs in `build.yml` reference the deleted `lms-plugin/` directory — dead code, gated behind workflow_dispatch input so harmless on routine pushes. Cleanup also touches the `release` job's `needs:` array and the `summary` job.
 
-**Release artifact-name rename** (~1–2 h). Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/unified-hifi-control` + `.service` file), Arch AUR package name, build artifact filenames. All gated, don't fire routinely. Worth doing before the next tagged release; requires also renaming the actual `.service` files in `build/linux/` and `build/arch/`.
+**Release artifact-name rename** (~1–2 h). Synology SPK names, QNAP QPKG names, Linux deb/rpm install paths (`/usr/bin/roon-ai` + `.service` file), Arch AUR package name, build artifact filenames. All gated, don't fire routinely. Worth doing before the next tagged release; requires also renaming the actual `.service` files in `build/linux/` and `build/arch/`.
 
 **Lower-priority follow-ups**
 
@@ -2345,3 +2340,68 @@ Real next moves:
 - **Auto-title via Claude** if the first-message titles start feeling rough.
 
 Or — and this is the most honest answer — settle in. The leaderboard is mostly green, the project ships a coherent feature set under a coherent name, and the next priority is best discovered by living with it.
+
+---
+
+## Recent Work (2026-04-28) — Identifier Rename: Drop "unified-hifi-control" + "Muness" Branding
+
+The 2026-04-19 rename was display-only — the Roon `extension_id`, MCP server name, config dir paths, env-var prefix, Docker image, and macOS bundle id all still carried `unified-hifi-control`/`muness` from the original Cloud Atlas / Open Horizons fork lineage. Plus the Roon Extensions UI still showed "Muness Castle" as the publisher.
+
+This pass eliminates every remaining variant of the legacy identifiers from the current codebase. Historical journal entries above (2026-04-19, 2026-04-27) are intentionally left unchanged because rewriting dated work logs would falsify history.
+
+### Identifier mapping
+
+| Old | New | Where |
+|---|---|---|
+| `com.muness.unified-hifi-control` (Roon ext_id) | `com.221b.roon-ai` | `src/adapters/roon.rs` |
+| `Muness Castle` (Roon publisher) | `RooAI` | `src/adapters/roon.rs` |
+| `unified-hifi-control` (MCP server name) | `roon-ai` | `src/mcp/mod.rs`, `.mcp.json` |
+| `%APPDATA%\unified-hifi-control\` | `%APPDATA%\roon-ai\` | `src/config/mod.rs` |
+| `unified-hifi/` (config subdir) | `state/` | `src/config/mod.rs` |
+| `UHC_*` env-var prefix | `ROON_AI_*` | `build.rs`, all `env!()` callsites, e2e tests, CI |
+| `muness/unified-hifi-control` (Docker) | `cfogarty1964/roon-ai` | `Dockerfile.release`, `docker-compose.yml`, `.github/workflows/docker.yml` |
+| `open-horizon-labs/unified-hifi-control` (repo URL) | `cfogarty1964/Roon-AI` | `Cargo.toml`, `src/mcp/mod.rs` |
+| `com.cloudatlas.unified-hifi-control.plist` | `com.221b.roon-ai.plist` | `build/macos/` |
+| `Muness Castle` (Cargo authors / package.json author / pkg maintainer) | `RooAI` | `Cargo.toml`, `package.json`, `build/arch/PKGBUILD`, `build/qnap/qpkg.cfg`, `build/synology/INFO` |
+
+### Files renamed via `git mv`
+
+- `build/arch/unified-hifi-control.{install,service}` → `roon-ai.{install,service}`
+- `build/linux/unified-hifi-control.service` → `roon-ai.service`
+- `build/macos/com.cloudatlas.unified-hifi-control.plist` → `com.221b.roon-ai.plist`
+- `build/qnap/shared/unified-hifi-control.sh` → `roon-ai.sh`
+- `build/qnap/shared/icons/unified-hifi-control{.gif,_64.png,_80.png}` → `roon-ai*`
+
+### Mechanics
+
+A Python script (`/tmp/rename_sweep.py`, not committed) did 60+ ordered text substitutions across 52 files. Order mattered: URL-prefixed forms (`open-horizon-labs/unified-hifi-control`) had to resolve before bare `unified-hifi-control` so the GitHub owner/repo split happened correctly. `cfogarty1964/Roon-AI` is the new public canonical URL.
+
+### Stale references removed
+
+The CI workflows (`.github/workflows/build.yml:1497`, `docker.yml:91`) were publishing the Roon AI image to **two** Docker tags: `cfogarty1964/roon-ai` *and* `muness/roon-extension-knob`. The latter was a leftover from when this codebase included the Roon Knob hardware bridge (removed 2026-04-26). Removed the second tag — the user has no publish access to that namespace anyway.
+
+### User config migration
+
+User had:
+- `%APPDATA%\unified-hifi-control\config.toml` (with their Anthropic API key)
+- `%APPDATA%\unified-hifi-control\unified-hifi\app-settings.json`
+- `%APPDATA%\unified-hifi-control\unified-hifi\roon_state.json` (skipped — re-auth invalidates it)
+- `%APPDATA%\unified-hifi-control\firmware\` (orphan from removed Knob feature — skipped)
+
+Migrated to `%APPDATA%\roon-ai\` (config.toml at root, app-settings.json under `state\`). The old directory was left in place for the user to delete manually.
+
+### Verification
+
+- `cargo build --features server --release` — clean (1 unrelated dead-code warning on `library.rs::PlayItemRequest`)
+- `cargo test --features server` — 117 passed, 0 failed, 8 doc-tests ignored
+- Live binary smoke: `GET /status` returned `{"service":"roon-ai","version":"0.0.0","git_sha":"afa2027","roon_connected":false,"upnp_devices":0,"bus_subscribers":3}` — `roon_connected: false` is expected post-rename until user re-authorises the new extension in Roon Settings → Extensions.
+
+### What stays "Muness" / `muness`
+
+Intentionally preserved in dated handoff entries (this file, lines 901-1880) and in `.wm/dive_context.md`/`.ba/issues.jsonl` (historical caches). These are journal-style records of past work; rewriting them would erase the project's actual history. The `AGENTS.md:108` reference to `/Users/muness1/src/roon-ai/` is the original developer's local path on their old machine — also historical context.
+
+### Open follow-ups (not done in this pass)
+
+- `mcp/index.js` is a stale `package.json` `bin` entry pointing at a deleted Node.js MCP file. Pre-existed this rename. Either delete the bin entry or `git rm -r mcp/` (the dir already doesn't exist).
+- The `clippy.toml` has no remaining old refs but is worth glancing at if you're touching lints.
+- The `cloudatlas.ai` contact emails in `.claude-plugin/marketplace.json:5` and `plugin/.claude-plugin/plugin.json:7` are the *original* Cloud Atlas company contact — separate identity, left alone. Update if you want plugin metadata to reflect the current fork.

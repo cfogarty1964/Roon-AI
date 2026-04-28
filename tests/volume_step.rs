@@ -2,7 +2,6 @@
 //!
 //! Bug: Adapters hardcode volume_step to 1.0, ignoring backend-specific values.
 //!
-//! See: https://github.com/cloud-atlas-ai/unified-hifi-control/issues/152
 //!
 //! Test strategy:
 //! 1. Source-scanning lint tests (catch obvious regressions)

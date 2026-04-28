@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>Unified Hi-Fi Control</title>
-    <organization>com.cloudatlas</organization>
+    <title>Roon AI</title>
+    <organization>com.221b</organization>
     <domains enable_localSystem="true" enable_currentUserHome="false"/>
 
     <options customize="never" require-scripts="true" hostArchitectures="x86_64,arm64"/>
@@ -12,20 +12,20 @@
 
     <choices-outline>
         <line choice="default">
-            <line choice="com.cloudatlas.unified-hifi-control.pkg"/>
+            <line choice="com.221b.roon-ai.pkg"/>
         </line>
     </choices-outline>
 
     <choice id="default"/>
 
-    <choice id="com.cloudatlas.unified-hifi-control.pkg"
+    <choice id="com.221b.roon-ai.pkg"
             visible="false"
-            title="Unified Hi-Fi Control"
-            description="Installs Unified Hi-Fi Control service">
-        <pkg-ref id="com.cloudatlas.unified-hifi-control.pkg"/>
+            title="Roon AI"
+            description="Installs Roon AI service">
+        <pkg-ref id="com.221b.roon-ai.pkg"/>
     </choice>
 
-    <pkg-ref id="com.cloudatlas.unified-hifi-control.pkg"
+    <pkg-ref id="com.221b.roon-ai.pkg"
              version="VERSION_PLACEHOLDER"
-             onConclusion="none">unified-hifi-control.pkg</pkg-ref>
+             onConclusion="none">roon-ai.pkg</pkg-ref>
 </installer-gui-script>

@@ -1,12 +1,12 @@
 {
   "name": "hifi-control",
   "version": "2.5.1-rc.9",
-  "description": "Unified Hi-Fi Control - Control Roon playback and HQPlayer audio pipeline",
+  "description": "Roon AI - Control Roon playback and HQPlayer audio pipeline",
   "author": {
     "name": "Cloud Atlas AI",
     "email": "hello@cloudatlas.ai",
-    "url": "https://github.com/cloud-atlas-ai/unified-hifi-control"
+    "url": "https://github.com/cfogarty1964/Roon-AI"
   },
-  "repository": "https://github.com/cloud-atlas-ai/unified-hifi-control",
-  "homepage": "https://github.com/cloud-atlas-ai/unified-hifi-control"
+  "repository": "https://github.com/cfogarty1964/Roon-AI",
+  "homepage": "https://github.com/cfogarty1964/Roon-AI"
 }

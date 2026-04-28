@@ -1477,13 +1477,11 @@ async fn run_roon_loop(
     let state_path_str = state_path.to_string_lossy().to_string();
     tracing::info!("Roon state file: {}", state_path_str);
 
-    // Extension info - Issue #169: Use UHC_VERSION for consistent version display
-    // Use same extension ID as Node.js for seamless migration
     let info = Info::new(
-        "com.muness.unified-hifi-control".to_string(),
+        "com.221b.roon-ai".to_string(),
         "Roon AI",
-        env!("UHC_VERSION"),
-        Some("Muness Castle"),
+        env!("ROON_AI_VERSION"),
+        Some("RooAI"),
         "",
         Some(env!("CARGO_PKG_REPOSITORY")),
     );
@@ -1556,7 +1554,7 @@ async fn run_roon_loop(
 
                     // Update status shown in Roon Settings → Extensions
                     if let Some(status) = core.get_status() {
-                        let message = format!("v{} • {}", env!("UHC_VERSION"), base_url_for_events);
+                        let message = format!("v{} • {}", env!("ROON_AI_VERSION"), base_url_for_events);
                         status.set_status(message, false).await;
                     }
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 CONF=/etc/config/qpkg.conf
-QPKG_NAME="unified-hifi-control"
+QPKG_NAME="roon-ai"
 QPKG_ROOT=$(/sbin/getcfg $QPKG_NAME Install_Path -f $CONF)
-PID_FILE="${QPKG_ROOT}/unified-hifi-control.pid"
+PID_FILE="${QPKG_ROOT}/roon-ai.pid"
 
 # Stop the service if running
 if [ -f "$PID_FILE" ]; then
@@ -16,5 +16,5 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-echo "Unified Hi-Fi Control uninstalled"
+echo "Roon AI uninstalled"
 exit 0

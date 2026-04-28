@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
     dx build --fullstack --release @client --no-default-features --features web @server --features server && \
     cargo build --release && \
-    cp target/release/unified-hifi-control /app/unified-hifi-control-bin
+    cp target/release/roon-ai /app/roon-ai-bin
 
 # Runtime stage - minimal image, no public/ directory needed
 FROM debian:bookworm-slim
@@ -60,7 +60,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary with embedded web assets (ADR 002 - no public/ directory)
-COPY --from=builder /app/unified-hifi-control-bin /app/unified-hifi-control
+COPY --from=builder /app/roon-ai-bin /app/roon-ai
 
 # Create data directory for config persistence
 RUN mkdir -p /data
@@ -76,4 +76,4 @@ ENV RUST_LOG=info
 
 EXPOSE 8088
 
-CMD ["/app/unified-hifi-control"]
+CMD ["/app/roon-ai"]

@@ -1,4 +1,4 @@
-# Build Windows MSI installer for Unified Hi-Fi Control
+# Build Windows MSI installer for Roon AI
 # Requires: WiX Toolset v3 (https://wixtoolset.org/)
 
 param(
@@ -13,7 +13,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "`nBuilding Unified Hi-Fi Control MSI v$Version`n" -ForegroundColor Cyan
+Write-Host "`nBuilding Roon AI MSI v$Version`n" -ForegroundColor Cyan
 
 # Verify WiX is installed
 $wixPath = "${env:WIX}bin"
@@ -52,7 +52,7 @@ New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $wxsFile = Join-Path $scriptDir "installer.wxs"
 $wixobjFile = Join-Path $OutputPath "installer.wixobj"
-$msiFile = Join-Path $OutputPath "unified-hifi-control-$Version.msi"
+$msiFile = Join-Path $OutputPath "roon-ai-$Version.msi"
 
 # Compile WiX source
 Write-Host "`nCompiling WiX source..."

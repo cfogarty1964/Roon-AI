@@ -1,6 +1,6 @@
 #!/bin/sh
 CONF=/etc/config/qpkg.conf
-QPKG_NAME="unified-hifi-control"
+QPKG_NAME="roon-ai"
 QPKG_ROOT=`/sbin/getcfg $QPKG_NAME Install_Path -f ${CONF}`
 
 export QPKG_ROOT
@@ -13,8 +13,8 @@ export LC_CTYPE=en_US.UTF-8
 export HOME=$QPKG_ROOT
 export PATH=$QPKG_ROOT:$PATH
 
-export PIDF=${QPKG_ROOT}/unified-hifi-control.pid
-export LOGF=${QPKG_ROOT}/unified-hifi-control.log
+export PIDF=${QPKG_ROOT}/roon-ai.pid
+export LOGF=${QPKG_ROOT}/roon-ai.log
 
 case "$1" in
   start)
@@ -27,7 +27,7 @@ case "$1" in
     cd "$QPKG_ROOT" || { echo "Failed to cd to $QPKG_ROOT"; exit 1; }
 
     # Start the static binary (musl-linked, no dependencies)
-    "${QPKG_ROOT}/unified-hifi-control" >> "$LOGF" 2>&1 &
+    "${QPKG_ROOT}/roon-ai" >> "$LOGF" 2>&1 &
     echo $! > "$PIDF"
 
     echo "$QPKG_NAME started."
@@ -53,7 +53,7 @@ case "$1" in
     fi
 
     # Fallback: kill by binary path
-    pkill -9 -f "${QPKG_ROOT}/unified-hifi-control" 2>/dev/null
+    pkill -9 -f "${QPKG_ROOT}/roon-ai" 2>/dev/null
 
     echo "$QPKG_NAME stopped."
     ;;

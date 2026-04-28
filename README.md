@@ -1,8 +1,8 @@
 # Roon AI
 
-[![Build](https://github.com/open-horizon-labs/unified-hifi-control/actions/workflows/build.yml/badge.svg?branch=v3)](https://github.com/open-horizon-labs/unified-hifi-control/actions/workflows/build.yml)
-[![GitHub Release](https://img.shields.io/github/v/release/open-horizon-labs/unified-hifi-control)](https://github.com/open-horizon-labs/unified-hifi-control/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/open-horizon-labs/unified-hifi-control/total)](https://github.com/open-horizon-labs/unified-hifi-control/releases)
+[![Build](https://github.com/cfogarty1964/Roon-AI/actions/workflows/build.yml/badge.svg?branch=v3)](https://github.com/cfogarty1964/Roon-AI/actions/workflows/build.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/cfogarty1964/Roon-AI)](https://github.com/cfogarty1964/Roon-AI/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/cfogarty1964/Roon-AI/total)](https://github.com/cfogarty1964/Roon-AI/releases)
 
 A Roon and UPnP/DLNA hi-fi control bridge with a web UI, conversational AI agent (typed or spoken), library browser, and Claude MCP integration.
 
@@ -37,8 +37,8 @@ Control your music with your voice, a chat message, or a browser — all from on
 ```yaml
 # docker-compose.yml
 services:
-  unified-hifi-control:
-    image: muness/unified-hifi-control:latest
+  roon-ai:
+    image: cfogarty1964/roon-ai:latest
     network_mode: host
     volumes:
       - ./data:/data
@@ -55,7 +55,7 @@ docker compose up -d
 
 ### Native Binary (Windows — recommended for Roon)
 
-Pre-built binaries for Linux (x64, arm64, armv7), macOS (universal), and Windows are available on the [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases) page.
+Pre-built binaries for Linux (x64, arm64, armv7), macOS (universal), and Windows are available on the [Releases](https://github.com/cfogarty1964/Roon-AI/releases) page.
 
 **Windows:**
 ```powershell
@@ -67,13 +67,13 @@ $env:RUST_LOG="debug"
 
 ### Synology NAS (DSM 7)
 
-Download the SPK from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
+Download the SPK from [Releases](https://github.com/cfogarty1964/Roon-AI/releases):
 - `*_apollolake.spk` — Intel x86_64 (DS918+, DS920+, etc.)
 - `*_rtd1296.spk` — ARM64 (DS220+, DS420+, etc.)
 
 ### QNAP NAS
 
-Download the QPKG from [Releases](https://github.com/open-horizon-labs/unified-hifi-control/releases):
+Download the QPKG from [Releases](https://github.com/cfogarty1964/Roon-AI/releases):
 - `*_x86_64.qpkg` — Intel/AMD
 - `*_arm_64.qpkg` — ARM64
 
@@ -81,9 +81,9 @@ Download the QPKG from [Releases](https://github.com/open-horizon-labs/unified-h
 
 ## Configuration
 
-Config directory (Windows default): `%APPDATA%\unified-hifi-control\` (preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs).
+Config directory (Windows default): `%APPDATA%\roon-ai\` (preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs).
 
-Override with `UHC_CONFIG_DIR` env var.
+Override with `ROON_AI_CONFIG_DIR` env var.
 
 **`config.toml`** (loaded via the `config` crate's `with_name`):
 ```toml
@@ -101,8 +101,8 @@ api_key = "sk-ant-..."   # Anthropic API key — enables the conversational AI p
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `UHC_PORT` | HTTP port | `8088` |
-| `UHC_CONFIG_DIR` | Config/state directory | platform default |
+| `ROON_AI_PORT` | HTTP port | `8088` |
+| `ROON_AI_CONFIG_DIR` | Config/state directory | platform default |
 | `ANTHROPIC_API_KEY` | Enables AI chat (overrides TOML) | — |
 | `RUST_LOG` | Log filter | `roon_ai=debug` |
 
@@ -151,7 +151,7 @@ The bridge exposes an MCP endpoint so Claude Code, Claude Desktop, and other MCP
 ```json
 {
   "mcpServers": {
-    "unified-hifi-control": {
+    "roon-ai": {
       "type": "http",
       "url": "http://<bridge-host>:8088/mcp"
     }

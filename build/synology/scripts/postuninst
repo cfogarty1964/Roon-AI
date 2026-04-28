@@ -2,7 +2,7 @@
 # Post-uninstallation script
 # Runs after package files are removed
 
-PACKAGE_NAME="unified-hifi-control"
+PACKAGE_NAME="roon-ai"
 PID_FILE="/var/run/${PACKAGE_NAME}.pid"
 LOG_FILE="/var/log/${PACKAGE_NAME}.log"
 

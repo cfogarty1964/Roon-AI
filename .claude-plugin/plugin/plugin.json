@@ -1,7 +1,7 @@
 {
   "name": "hifi-control",
   "version": "2.5.1",
-  "description": "Unified Hi-Fi Control - Control Roon and HQPlayer",
+  "description": "Roon AI - Control Roon and HQPlayer",
   "skills": [
     {
       "name": "sync-upstream",

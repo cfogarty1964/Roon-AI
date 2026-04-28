@@ -1,5 +1,5 @@
 services:
-  unified-hifi-control:
+  roon-ai:
     build: .
     # Host network required for Roon mDNS discovery
     network_mode: host

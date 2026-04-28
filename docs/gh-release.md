@@ -264,7 +264,7 @@ armv7 binaries are smoke-tested on x86_64 runners using QEMU:
   if: matrix.target == 'armv7-unknown-linux-musleabihf'
   run: |
     sudo apt-get update && sudo apt-get install -y qemu-user-static
-    qemu-arm-static ./target/${{ matrix.target }}/release/unified-hifi-control --version
+    qemu-arm-static ./target/${{ matrix.target }}/release/roon-ai --version
 ```
 
 This adds ~14s but catches ABI issues, missing linkage, and startup crashes before release.

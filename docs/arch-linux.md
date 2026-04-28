@@ -1,6 +1,6 @@
 # Arch Linux Installation
 
-Unified Hi-Fi Control is available for Arch Linux and Arch-based distributions (RoPieee, AudioLinux, etc.).
+Roon AI is available for Arch Linux and Arch-based distributions (RoPieee, AudioLinux, etc.).
 
 ## Installation from AUR
 
@@ -8,17 +8,17 @@ Unified Hi-Fi Control is available for Arch Linux and Arch-based distributions (
 
 ```bash
 # Using yay
-yay -S unified-hifi-control-bin
+yay -S roon-ai-bin
 
 # Using paru
-paru -S unified-hifi-control-bin
+paru -S roon-ai-bin
 ```
 
 ### Manual installation
 
 ```bash
-git clone https://aur.archlinux.org/unified-hifi-control-bin.git
-cd unified-hifi-control-bin
+git clone https://aur.archlinux.org/roon-ai-bin.git
+cd roon-ai-bin
 makepkg -si
 ```
 
@@ -28,13 +28,13 @@ makepkg -si
 
 ```bash
 # Enable and start the service
-sudo systemctl enable --now unified-hifi-control
+sudo systemctl enable --now roon-ai
 
 # Check status
-sudo systemctl status unified-hifi-control
+sudo systemctl status roon-ai
 
 # View logs
-journalctl -u unified-hifi-control -f
+journalctl -u roon-ai -f
 ```
 
 ### Access the Web UI
@@ -43,7 +43,7 @@ Open your browser to: **http://localhost:8088**
 
 ## Configuration
 
-Configuration files are stored in `/etc/unified-hifi-control/`.
+Configuration files are stored in `/etc/roon-ai/`.
 
 ### Environment Variables
 
@@ -52,14 +52,14 @@ The systemd service supports these environment variables (edit the service file 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8088` | HTTP server port |
-| `CONFIG_DIR` | `/etc/unified-hifi-control` | Configuration directory |
-| `DATA_DIR` | `/var/lib/unified-hifi-control` | State/data directory |
+| `CONFIG_DIR` | `/etc/roon-ai` | Configuration directory |
+| `DATA_DIR` | `/var/lib/roon-ai` | State/data directory |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
 
 To customize, create a drop-in:
 
 ```bash
-sudo systemctl edit unified-hifi-control
+sudo systemctl edit roon-ai
 ```
 
 Add your overrides:
@@ -74,27 +74,27 @@ Environment=RUST_LOG=debug
 
 | Path | Description |
 |------|-------------|
-| `/usr/bin/unified-hifi-control` | Binary |
-| `/usr/share/unified-hifi-control/public/` | Web assets |
-| `/etc/unified-hifi-control/` | Configuration |
-| `/var/lib/unified-hifi-control/` | Runtime state, Roon tokens |
-| `/usr/lib/systemd/system/unified-hifi-control.service` | Systemd service |
+| `/usr/bin/roon-ai` | Binary |
+| `/usr/share/roon-ai/public/` | Web assets |
+| `/etc/roon-ai/` | Configuration |
+| `/var/lib/roon-ai/` | Runtime state, Roon tokens |
+| `/usr/lib/systemd/system/roon-ai.service` | Systemd service |
 
 ## Uninstallation
 
 ```bash
 # Using yay
-yay -Rns unified-hifi-control-bin
+yay -Rns roon-ai-bin
 
 # Manual
-sudo pacman -Rns unified-hifi-control-bin
+sudo pacman -Rns roon-ai-bin
 ```
 
 Configuration and state directories are preserved. Remove manually if no longer needed:
 
 ```bash
-sudo rm -rf /etc/unified-hifi-control
-sudo rm -rf /var/lib/unified-hifi-control
+sudo rm -rf /etc/roon-ai
+sudo rm -rf /var/lib/roon-ai
 ```
 
 ## Building from Source
@@ -118,8 +118,8 @@ sudo pacman -S nodejs npm
 ### Build
 
 ```bash
-git clone https://github.com/open-horizon-labs/unified-hifi-control.git
-cd unified-hifi-control
+git clone https://github.com/cfogarty1964/Roon-AI.git
+cd roon-ai
 git checkout v3
 
 # Build CSS
@@ -132,7 +132,7 @@ dx build --release --platform web --features web
 cargo build --release
 ```
 
-The binary will be at `target/release/unified-hifi-control`.
+The binary will be at `target/release/roon-ai`.
 
 ## RoPieee / AudioLinux Integration
 
@@ -140,6 +140,6 @@ For RoPieee and AudioLinux developers: this package follows standard Arch packag
 
 Key considerations:
 - Binary is statically linked (musl) with no runtime dependencies
-- Web assets are required at `/usr/share/unified-hifi-control/public/` (symlinked to state dir)
+- Web assets are required at `/usr/share/roon-ai/public/` (symlinked to state dir)
 - Systemd service uses `DynamicUser=yes` for security
-- Configuration persists in `/etc/unified-hifi-control/`
+- Configuration persists in `/etc/roon-ai/`

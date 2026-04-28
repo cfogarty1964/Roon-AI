@@ -1,27 +1,27 @@
 //! Build script to inject version and git SHA at compile time.
 //!
 //! Environment variables (set by CI or fall back to defaults):
-//! - UHC_VERSION: Version string (defaults to CARGO_PKG_VERSION)
-//! - UHC_GIT_SHA: Git commit SHA (defaults to "unknown" or git rev-parse)
+//! - ROON_AI_VERSION: Version string (defaults to CARGO_PKG_VERSION)
+//! - ROON_AI_GIT_SHA: Git commit SHA (defaults to "unknown" or git rev-parse)
 
 use std::process::Command;
 
 fn main() {
-    // Version: prefer UHC_VERSION env var, fall back to CARGO_PKG_VERSION
-    let version = std::env::var("UHC_VERSION").unwrap_or_else(|_| {
+    // Version: prefer ROON_AI_VERSION env var, fall back to CARGO_PKG_VERSION
+    let version = std::env::var("ROON_AI_VERSION").unwrap_or_else(|_| {
         std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".into())
     });
-    println!("cargo:rustc-env=UHC_VERSION={}", version);
+    println!("cargo:rustc-env=ROON_AI_VERSION={}", version);
 
-    // Git SHA: prefer UHC_GIT_SHA, then GITHUB_SHA, then try git command
-    let git_sha = std::env::var("UHC_GIT_SHA")
+    // Git SHA: prefer ROON_AI_GIT_SHA, then GITHUB_SHA, then try git command
+    let git_sha = std::env::var("ROON_AI_GIT_SHA")
         .or_else(|_| std::env::var("GITHUB_SHA").map(|s| s[..7].to_string()))
         .unwrap_or_else(|_| get_git_sha());
-    println!("cargo:rustc-env=UHC_GIT_SHA={}", git_sha);
+    println!("cargo:rustc-env=ROON_AI_GIT_SHA={}", git_sha);
 
     // Rebuild if these change
-    println!("cargo:rerun-if-env-changed=UHC_VERSION");
-    println!("cargo:rerun-if-env-changed=UHC_GIT_SHA");
+    println!("cargo:rerun-if-env-changed=ROON_AI_VERSION");
+    println!("cargo:rerun-if-env-changed=ROON_AI_GIT_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
 }
 

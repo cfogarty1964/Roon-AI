@@ -1,4 +1,4 @@
-# Unified Hi-Fi Control - Build helpers
+# Roon AI - Build helpers
 
 # Pin Tailwind version for reproducible builds (update manually when needed)
 TAILWIND_VERSION := v4.1.18

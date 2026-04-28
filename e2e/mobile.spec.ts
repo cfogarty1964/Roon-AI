@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const BASE_URL = process.env.UHC_URL || 'http://192.168.1.2:8088';
+const BASE_URL = process.env.ROON_AI_URL || 'http://192.168.1.2:8088';
 
 test.describe('Mobile Responsive Layout', () => {
   test('zones page shows single column on iPhone', async ({ page }) => {

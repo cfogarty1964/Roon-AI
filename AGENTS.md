@@ -105,7 +105,7 @@ The test harness (`tests/client_harness.rs`) simulates:
 - iOS/Apple Watch client (hifi-control-ios Swift app)
 
 Reference implementations for expected behavior:
-- Node.js server: `/Users/muness1/src/unified-hifi-control/`
+- Node.js server: `/Users/muness1/src/roon-ai/`
 - Knob firmware: C code defining expected API responses
 - iOS app: Swift BridgeClient defining expected API format
 
@@ -256,7 +256,7 @@ Without the WASM bundle, components render but don't work (no navigation, no but
 dx build --release --platform web
 
 # Run from the dx output directory (contains public/wasm/ assets)
-./target/dx/unified-hifi-control/release/web/unified-hifi-control
+./target/dx/roon-ai/release/web/roon-ai
 ```
 
 **Why `cargo run` doesn't work:**

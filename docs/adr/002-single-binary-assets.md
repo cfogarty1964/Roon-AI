@@ -8,8 +8,8 @@
 **Users cannot reliably run the binary after installation.**
 
 The current architecture requires:
-1. Binary installed to `/usr/bin/unified-hifi-control`
-2. Web assets installed to `/usr/share/unified-hifi-control/public/`
+1. Binary installed to `/usr/bin/roon-ai`
+2. Web assets installed to `/usr/share/roon-ai/public/`
 3. `DIOXUS_PUBLIC_PATH` environment variable set in service files
 4. Dioxus runtime creating symlinks or finding assets
 

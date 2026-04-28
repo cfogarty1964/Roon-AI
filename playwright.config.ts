@@ -8,7 +8,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: process.env.UHC_URL || 'http://192.168.1.2:8088',
+    baseURL: process.env.ROON_AI_URL || 'http://192.168.1.2:8088',
     trace: 'on-first-retry',
   },
   projects: [

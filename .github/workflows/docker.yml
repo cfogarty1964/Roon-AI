@@ -89,8 +89,7 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
-            muness/unified-hifi-control:edge
-            muness/roon-extension-knob:edge
+            cfogarty1964/roon-ai:edge
           build-args: |
             APP_VERSION=edge
           cache-from: type=gha

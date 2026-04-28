@@ -563,12 +563,12 @@ pub async fn handle_mcp_delete(
 pub fn create_mcp_extension(state: AppState) -> axum::Extension<McpExtState> {
     let server_details = InitializeResult {
         server_info: Implementation {
-            name: "unified-hifi-control".into(),
+            name: "roon-ai".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             title: Some("Roon AI".into()),
             description: Some("Control your music system via MCP".into()),
             icons: vec![],
-            website_url: Some("https://github.com/open-horizon-labs/unified-hifi-control".into()),
+            website_url: Some("https://github.com/cfogarty1964/Roon-AI".into()),
         },
         capabilities: ServerCapabilities {
             tools: Some(ServerCapabilitiesTools { list_changed: None }),

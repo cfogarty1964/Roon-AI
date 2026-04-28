@@ -1,32 +1,31 @@
-# Maintainer: Muness Castle <muness@gmail.com>
-# Contributor: Open Horizons <muness@openhorizons.me>
-# AUR Package: unified-hifi-control-bin
+# Maintainer: RooAI
+# AUR Package: roon-ai-bin
 # Pre-built binary package - downloads from GitHub releases
 # Note: Web assets are embedded in the binary (ADR 002)
 
-pkgname=unified-hifi-control-bin
-_pkgname=unified-hifi-control
+pkgname=roon-ai-bin
+_pkgname=roon-ai
 pkgver=3.1.0
 pkgrel=1
 pkgdesc="Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer, and hardware surfaces"
 arch=('x86_64' 'aarch64' 'armv7h')
-url="https://github.com/open-horizon-labs/unified-hifi-control"
+url="https://github.com/cfogarty1964/Roon-AI"
 license=('custom:PolyForm-Noncommercial-1.0.0')
 depends=()
 provides=("${_pkgname}")
 conflicts=("${_pkgname}")
-backup=('etc/unified-hifi-control/config.json')
+backup=('etc/roon-ai/config.json')
 install="${_pkgname}.install"
 
 # Architecture-specific binaries (renamed to 'binary' for $CARCH-agnostic reference)
-source_x86_64=("binary::${url}/releases/download/v${pkgver}/unified-hifi-linux-x64")
-source_aarch64=("binary::${url}/releases/download/v${pkgver}/unified-hifi-linux-arm64")
-source_armv7h=("binary::${url}/releases/download/v${pkgver}/unified-hifi-linux-armv7")
+source_x86_64=("binary::${url}/releases/download/v${pkgver}/roon-ai-linux-x64")
+source_aarch64=("binary::${url}/releases/download/v${pkgver}/roon-ai-linux-arm64")
+source_armv7h=("binary::${url}/releases/download/v${pkgver}/roon-ai-linux-armv7")
 
 # Common files (no separate web assets - embedded in binary)
 source=("${_pkgname}.service"
         "${_pkgname}.install"
-        "LICENSE::https://raw.githubusercontent.com/open-horizon-labs/unified-hifi-control/v3/LICENSE")
+        "LICENSE::https://raw.githubusercontent.com/cfogarty1964/Roon-AI/v3/LICENSE")
 
 # Checksums - update these for each release
 # Run: updpkgsums

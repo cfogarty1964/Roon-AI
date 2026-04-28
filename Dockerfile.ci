@@ -10,8 +10,8 @@ RUN apk add --no-cache ca-certificates
 
 # Copy pre-built binary (web assets are embedded)
 ARG TARGETARCH
-COPY binaries/unified-hifi-linux-${TARGETARCH} /app/unified-hifi-control
-RUN chmod +x /app/unified-hifi-control
+COPY binaries/roon-ai-linux-${TARGETARCH} /app/roon-ai
+RUN chmod +x /app/roon-ai
 
 # Create data directory for config persistence
 RUN mkdir -p /data
@@ -27,4 +27,4 @@ ENV RUST_LOG=info
 
 EXPOSE 8088
 
-CMD ["/app/unified-hifi-control"]
+CMD ["/app/roon-ai"]

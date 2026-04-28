@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PACKAGE_NAME="unified-hifi-control"
+PACKAGE_NAME="roon-ai"
 PACKAGE_DIR="/var/packages/${PACKAGE_NAME}"
 TARGET_DIR="${PACKAGE_DIR}/target"
 PID_FILE="/var/run/${PACKAGE_NAME}.pid"
@@ -20,7 +20,7 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # Make binary executable
-chmod +x "${TARGET_DIR}/unified-hifi-control"
+chmod +x "${TARGET_DIR}/roon-ai"
 
 # Create data directory if it doesn't exist
 mkdir -p "${PACKAGE_DIR}/var"
@@ -31,7 +31,7 @@ if [ "$WAS_RUNNING" = true ]; then
     "${PACKAGE_DIR}/scripts/start-stop-status" start
 fi
 
-echo "Unified Hi-Fi Control installed successfully"
+echo "Roon AI installed successfully"
 echo "Access the web UI at http://$(hostname):8088"
 
 exit 0

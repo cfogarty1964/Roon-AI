@@ -32,8 +32,8 @@ pub fn Layout(props: LayoutProps) -> Element {
         _ => {
             // Fallback to compile-time values during loading/error
             (
-                env!("UHC_VERSION").to_string(),
-                env!("UHC_GIT_SHA").to_string(),
+                env!("ROON_AI_VERSION").to_string(),
+                env!("ROON_AI_GIT_SHA").to_string(),
             )
         }
     };

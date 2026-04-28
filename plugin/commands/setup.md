@@ -1,14 +1,14 @@
 # Setup Hi-Fi Control MCP
 
-Set up the Unified Hi-Fi Control MCP server to control your music system.
+Set up the Roon AI MCP server to control your music system.
 
-**Prerequisites:** You need the unified-hifi-control bridge running somewhere on your network. This MCP server connects to the bridge via HTTP.
+**Prerequisites:** You need the roon-ai bridge running somewhere on your network. This MCP server connects to the bridge via HTTP.
 
 **Execute these steps in order:**
 
 ## Step 1: Determine bridge URL
 
-Ask the user where their unified-hifi-control bridge is running:
+Ask the user where their roon-ai bridge is running:
 - **Local (default):** `http://localhost:8088`
 - **Docker:** Check their Docker host IP, port 8088
 - **Remote:** Ask for the URL
@@ -23,14 +23,14 @@ curl -s ${HIFI_BRIDGE_URL}/status
 ```
 
 If this fails, help the user:
-- Start the bridge: `cd /path/to/unified-hifi-control && npm start`
-- Or via Docker: `docker run -p 8088:8088 ghcr.io/cloud-atlas-ai/unified-hifi-control`
+- Start the bridge: `cd /path/to/roon-ai && npm start`
+- Or via Docker: `docker run -p 8088:8088 ghcr.io/cfogarty1964/Roon-AI`
 
 ## Step 3: Add MCP server to Claude Code
 
 Use the `claude mcp add` command:
 ```bash
-claude mcp add hifi-control --scope user -e HIFI_BRIDGE_URL=${HIFI_BRIDGE_URL} -- node /path/to/unified-hifi-control/mcp/index.js
+claude mcp add hifi-control --scope user -e HIFI_BRIDGE_URL=${HIFI_BRIDGE_URL} -- node /path/to/roon-ai/mcp/index.js
 ```
 
 ## Step 4: Inform the user

@@ -9,10 +9,10 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates
 
 # Copy pre-built binary (web assets are embedded)
-COPY dist/unified-hifi-control /app/
+COPY dist/roon-ai /app/
 
 # Make binary executable
-RUN chmod +x /app/unified-hifi-control
+RUN chmod +x /app/roon-ai
 
 # Create data directory for config persistence
 RUN mkdir -p /data
@@ -24,4 +24,4 @@ ENV RUST_LOG=info
 
 EXPOSE 8088
 
-CMD ["/app/unified-hifi-control"]
+CMD ["/app/roon-ai"]

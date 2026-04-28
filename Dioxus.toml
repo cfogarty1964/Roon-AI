@@ -1,9 +1,9 @@
 [application]
-name = "unified-hifi-control"
+name = "roon-ai"
 asset_dir = "public"
 
 [web.app]
-title = "Unified Hi-Fi Control"
+title = "Roon AI"
 
 [web.watcher]
 reload_html = true

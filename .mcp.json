@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "unified-hifi-control": {
+    "roon-ai": {
       "type": "http",
       "url": "http://localhost:8089/mcp"
     }

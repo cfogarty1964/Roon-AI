@@ -572,8 +572,8 @@ jobs:
 
       - name: Build with zigbuild (embeds WASM)
         env:
-          UHC_VERSION: ${{ needs.plan.outputs.version }}
-          UHC_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
+          ROON_AI_VERSION: ${{ needs.plan.outputs.version }}
+          ROON_AI_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
         run: |
           # Force rebuild of main crate to pick up version env vars and embedded assets
           cargo clean -p roon-ai 2>/dev/null || true
@@ -582,7 +582,7 @@ jobs:
       - name: Rename binary
         run: |
           mkdir -p dist/bin
-          cp target/x86_64-unknown-linux-musl/release/roon-ai dist/bin/unified-hifi-linux-x64
+          cp target/x86_64-unknown-linux-musl/release/roon-ai dist/bin/roon-ai-linux-x64
 
       - name: Upload binary
         uses: actions/upload-artifact@v6
@@ -604,12 +604,12 @@ jobs:
           path: dist/
 
       - name: Make executable
-        run: chmod +x dist/unified-hifi-linux-x64
+        run: chmod +x dist/roon-ai-linux-x64
 
       - name: Start server
         run: |
           export RUST_BACKTRACE=1
-          dist/unified-hifi-linux-x64 > /tmp/server.log 2>&1 &
+          dist/roon-ai-linux-x64 > /tmp/server.log 2>&1 &
           echo $! > /tmp/server.pid
           # Wait for server to be ready (max 30s)
           for i in {1..30}; do
@@ -743,10 +743,10 @@ jobs:
       matrix:
         include:
           - target: aarch64-unknown-linux-musl
-            output: unified-hifi-linux-arm64
+            output: roon-ai-linux-arm64
             arch: arm64
           - target: armv7-unknown-linux-musleabihf
-            output: unified-hifi-linux-armv7
+            output: roon-ai-linux-armv7
             arch: armv7
     steps:
       - uses: actions/checkout@v6
@@ -797,8 +797,8 @@ jobs:
 
       - name: Build with zigbuild (embeds WASM)
         env:
-          UHC_VERSION: ${{ needs.plan.outputs.version }}
-          UHC_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
+          ROON_AI_VERSION: ${{ needs.plan.outputs.version }}
+          ROON_AI_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
         run: |
           # Force rebuild of main crate to pick up version env vars and embedded assets
           cargo clean -p roon-ai 2>/dev/null || true
@@ -864,8 +864,8 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-          UHC_VERSION: ${{ needs.plan.outputs.version }}
-          UHC_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
+          ROON_AI_VERSION: ${{ needs.plan.outputs.version }}
+          ROON_AI_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
         run: |
           # Force rebuild of main crate to pick up version env vars and embedded assets
           cargo clean -p roon-ai 2>/dev/null || true
@@ -920,8 +920,8 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-          UHC_VERSION: ${{ needs.plan.outputs.version }}
-          UHC_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
+          ROON_AI_VERSION: ${{ needs.plan.outputs.version }}
+          ROON_AI_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
         run: |
           # Force rebuild of main crate to pick up version env vars and embedded assets
           cargo clean -p roon-ai 2>/dev/null || true
@@ -962,8 +962,8 @@ jobs:
           lipo -create \
             x64/roon-ai \
             arm64/roon-ai \
-            -output dist/bin/unified-hifi-macos-universal
-          file dist/bin/unified-hifi-macos-universal
+            -output dist/bin/roon-ai-macos-universal
+          file dist/bin/roon-ai-macos-universal
 
       - name: Upload binary
         uses: actions/upload-artifact@v6
@@ -1016,8 +1016,8 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-          UHC_VERSION: ${{ needs.plan.outputs.version }}
-          UHC_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
+          ROON_AI_VERSION: ${{ needs.plan.outputs.version }}
+          ROON_AI_GIT_SHA: ${{ needs.plan.outputs.git_sha }}
         run: |
           # Force rebuild of main crate to pick up version env vars and embedded assets
           cargo clean -p roon-ai 2>/dev/null || true
@@ -1108,29 +1108,29 @@ jobs:
           mkdir -p Bin/MSWin32-x64-multi-thread
 
           # Copy binaries to their platform folders
-          # All use same name so LMS findBin('unified-hifi-control') works
-          if [ -f ../binaries/unified-hifi-linux-x64 ]; then
-            cp ../binaries/unified-hifi-linux-x64 Bin/x86_64-linux/unified-hifi-control
-            chmod +x Bin/x86_64-linux/unified-hifi-control
+          # All use same name so LMS findBin('roon-ai') works
+          if [ -f ../binaries/roon-ai-linux-x64 ]; then
+            cp ../binaries/roon-ai-linux-x64 Bin/x86_64-linux/roon-ai
+            chmod +x Bin/x86_64-linux/roon-ai
           fi
 
-          if [ -f ../binaries/unified-hifi-linux-arm64 ]; then
-            cp ../binaries/unified-hifi-linux-arm64 Bin/aarch64-linux/unified-hifi-control
-            chmod +x Bin/aarch64-linux/unified-hifi-control
+          if [ -f ../binaries/roon-ai-linux-arm64 ]; then
+            cp ../binaries/roon-ai-linux-arm64 Bin/aarch64-linux/roon-ai
+            chmod +x Bin/aarch64-linux/roon-ai
           fi
 
-          if [ -f ../binaries/unified-hifi-linux-armv7 ]; then
-            cp ../binaries/unified-hifi-linux-armv7 Bin/arm-linux/unified-hifi-control
-            chmod +x Bin/arm-linux/unified-hifi-control
+          if [ -f ../binaries/roon-ai-linux-armv7 ]; then
+            cp ../binaries/roon-ai-linux-armv7 Bin/arm-linux/roon-ai
+            chmod +x Bin/arm-linux/roon-ai
           fi
 
-          if [ -f ../binaries/unified-hifi-macos-universal ]; then
-            cp ../binaries/unified-hifi-macos-universal Bin/darwin/unified-hifi-control
-            chmod +x Bin/darwin/unified-hifi-control
+          if [ -f ../binaries/roon-ai-macos-universal ]; then
+            cp ../binaries/roon-ai-macos-universal Bin/darwin/roon-ai
+            chmod +x Bin/darwin/roon-ai
           fi
 
           if [ -f ../binaries/unified-hifi-win64.exe ]; then
-            cp ../binaries/unified-hifi-win64.exe Bin/MSWin32-x64-multi-thread/unified-hifi-control.exe
+            cp ../binaries/unified-hifi-win64.exe Bin/MSWin32-x64-multi-thread/roon-ai.exe
           fi
 
           # Note: Web assets are embedded in the binary (ADR 002)
@@ -1138,20 +1138,20 @@ jobs:
 
           # Show what we bundled
           echo "Bundled binaries:"
-          find Bin -type f -name "unified-hifi-control*" | head -20
+          find Bin -type f -name "roon-ai*" | head -20
 
           # Create ZIP with everything
-          zip -r ../dist/lms-unified-hifi-control-${{ needs.plan.outputs.version }}.zip . \
+          zip -r ../dist/lms-roon-ai-${{ needs.plan.outputs.version }}.zip . \
             -x "*.git*"
 
       - name: Repack with correct directory structure
         run: |
           cd dist
           mkdir -p repack
-          unzip lms-unified-hifi-control-${{ needs.plan.outputs.version }}.zip -d repack/UnifiedHiFi
-          rm lms-unified-hifi-control-${{ needs.plan.outputs.version }}.zip
+          unzip lms-roon-ai-${{ needs.plan.outputs.version }}.zip -d repack/UnifiedHiFi
+          rm lms-roon-ai-${{ needs.plan.outputs.version }}.zip
           cd repack
-          zip -r ../lms-unified-hifi-control-${{ needs.plan.outputs.version }}.zip UnifiedHiFi
+          zip -r ../lms-roon-ai-${{ needs.plan.outputs.version }}.zip UnifiedHiFi
           cd ..
           rm -rf repack
 
@@ -1159,7 +1159,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: lms-plugin
-          path: dist/lms-unified-hifi-control-*.zip
+          path: dist/lms-roon-ai-*.zip
           retention-days: 5
 
   # =============================================================================
@@ -1182,11 +1182,11 @@ jobs:
           - arch: apollolake
             cpu_arch: x86_64
             target: x86_64-unknown-linux-musl
-            binary: unified-hifi-linux-x64
+            binary: roon-ai-linux-x64
           - arch: rtd1296
             cpu_arch: armv8
             target: aarch64-unknown-linux-musl
-            binary: unified-hifi-linux-arm64
+            binary: roon-ai-linux-arm64
     steps:
       - uses: actions/checkout@v6
 
@@ -1206,8 +1206,8 @@ jobs:
 
       - name: Rename binary
         run: |
-          mv build/synology/package/${{ matrix.binary }} build/synology/package/unified-hifi-control
-          chmod +x build/synology/package/unified-hifi-control
+          mv build/synology/package/${{ matrix.binary }} build/synology/package/roon-ai
+          chmod +x build/synology/package/roon-ai
 
       - name: Update INFO file
         run: |
@@ -1228,7 +1228,7 @@ jobs:
           # Create SPK (exclude empty WIZARD_UIFILES - optional component)
           # Naming convention: {package}-{cpu_arch}-{version}-dsm7.spk (matches Tailscale)
           mkdir -p ../../dist/installers
-          SPK_NAME="unified-hifi-control-${{ matrix.cpu_arch }}-${{ needs.plan.outputs.version }}-dsm7.spk"
+          SPK_NAME="roon-ai-${{ matrix.cpu_arch }}-${{ needs.plan.outputs.version }}-dsm7.spk"
           tar -cvf "../../dist/installers/${SPK_NAME}" \
             INFO PACKAGE_ICON.PNG PACKAGE_ICON_256.PNG \
             package.tgz scripts conf
@@ -1261,8 +1261,8 @@ jobs:
       - name: Prepare QNAP package
         run: |
           mkdir -p qnap-build/shared
-          cp dist/bin/unified-hifi-linux-x64 qnap-build/shared/unified-hifi-control
-          chmod +x qnap-build/shared/unified-hifi-control
+          cp dist/bin/roon-ai-linux-x64 qnap-build/shared/roon-ai
+          chmod +x qnap-build/shared/roon-ai
           cp build/qnap/shared/*.sh qnap-build/shared/
           chmod +x qnap-build/shared/*.sh
           cp -r build/qnap/shared/icons qnap-build/
@@ -1280,7 +1280,7 @@ jobs:
       - name: Move QPKG to dist
         run: |
           mkdir -p dist/installers
-          mv qnap-build/*.qpkg dist/installers/unified-hifi-control_${{ needs.plan.outputs.version }}_x86_64.qpkg
+          mv qnap-build/*.qpkg dist/installers/roon-ai_${{ needs.plan.outputs.version }}_x86_64.qpkg
 
       - name: Upload QNAP package
         uses: actions/upload-artifact@v6
@@ -1313,8 +1313,8 @@ jobs:
       - name: Prepare QNAP package
         run: |
           mkdir -p qnap-build/shared
-          cp dist/bin/unified-hifi-linux-arm64 qnap-build/shared/unified-hifi-control
-          chmod +x qnap-build/shared/unified-hifi-control
+          cp dist/bin/roon-ai-linux-arm64 qnap-build/shared/roon-ai
+          chmod +x qnap-build/shared/roon-ai
           cp build/qnap/shared/*.sh qnap-build/shared/
           chmod +x qnap-build/shared/*.sh
           cp -r build/qnap/shared/icons qnap-build/
@@ -1332,7 +1332,7 @@ jobs:
       - name: Move QPKG to dist
         run: |
           mkdir -p dist/installers
-          mv qnap-build/*.qpkg dist/installers/unified-hifi-control_${{ needs.plan.outputs.version }}_arm_64.qpkg
+          mv qnap-build/*.qpkg dist/installers/roon-ai_${{ needs.plan.outputs.version }}_arm_64.qpkg
 
       - name: Upload QNAP package
         uses: actions/upload-artifact@v6
@@ -1361,7 +1361,7 @@ jobs:
 
       - name: Prepare binary
         run: |
-          mv binaries/unified-hifi-linux-x64 binaries/unified-hifi-linux-amd64
+          mv binaries/roon-ai-linux-x64 binaries/roon-ai-linux-amd64
           chmod +x binaries/*
           ls -la binaries/
 
@@ -1378,7 +1378,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: muness/unified-hifi-control
+          images: cfogarty1964/roon-ai
           tags: |
             type=ref,event=pr
             type=ref,event=branch
@@ -1410,15 +1410,15 @@ jobs:
         include:
           - platform: linux/amd64
             target: x86_64-unknown-linux-musl
-            binary: unified-hifi-linux-x64
+            binary: roon-ai-linux-x64
             arch: amd64
           - platform: linux/arm64
             target: aarch64-unknown-linux-musl
-            binary: unified-hifi-linux-arm64
+            binary: roon-ai-linux-arm64
             arch: arm64
           - platform: linux/arm/v7
             target: armv7-unknown-linux-musleabihf
-            binary: unified-hifi-linux-armv7
+            binary: roon-ai-linux-armv7
             arch: armv7
     steps:
       - uses: actions/checkout@v6
@@ -1431,8 +1431,8 @@ jobs:
 
       - name: Prepare binary
         run: |
-          mv dist/${{ matrix.binary }} dist/unified-hifi-control
-          chmod +x dist/unified-hifi-control
+          mv dist/${{ matrix.binary }} dist/roon-ai
+          chmod +x dist/roon-ai
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1452,7 +1452,7 @@ jobs:
           context: .
           file: Dockerfile.release
           platforms: ${{ matrix.platform }}
-          outputs: type=image,name=muness/unified-hifi-control,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=cfogarty1964/roon-ai,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         run: |
@@ -1494,8 +1494,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            muness/unified-hifi-control
-            muness/roon-extension-knob
+            cfogarty1964/roon-ai
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -1506,7 +1505,7 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'muness/unified-hifi-control@sha256:%s ' *)
+            $(printf 'cfogarty1964/roon-ai@sha256:%s ' *)
 
       - name: Create manifest for legacy image name
         working-directory: /tmp/digests
@@ -1514,7 +1513,7 @@ jobs:
           TAGS=$(jq -cr '.tags | map(select(contains("roon-extension-knob"))) | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           if [ -n "$TAGS" ]; then
             docker buildx imagetools create $TAGS \
-              $(printf 'muness/unified-hifi-control@sha256:%s ' *)
+              $(printf 'cfogarty1964/roon-ai@sha256:%s ' *)
           fi
 
   # Note: Web assets are embedded in the binary (ADR 002)
@@ -1548,56 +1547,56 @@ jobs:
       - name: Build deb package (x64)
         run: |
           fpm -s dir -t deb \
-            -n unified-hifi-control \
+            -n roon-ai \
             -v ${{ needs.plan.outputs.version }} \
             --description "Source-agnostic hi-fi control bridge" \
-            --url "https://github.com/open-horizon-labs/unified-hifi-control" \
+            --url "https://github.com/cfogarty1964/Roon-AI" \
             --license "PolyForm Noncommercial 1.0.0" \
             -a amd64 \
             --after-install build/linux/postinst.sh \
-            dist/bin/unified-hifi-linux-x64=/usr/bin/unified-hifi-control \
-            build/linux/unified-hifi-control.service=/etc/systemd/system/unified-hifi-control.service
+            dist/bin/roon-ai-linux-x64=/usr/bin/roon-ai \
+            build/linux/roon-ai.service=/etc/systemd/system/roon-ai.service
 
       - name: Build rpm package (x64)
         run: |
           fpm -s dir -t rpm \
-            -n unified-hifi-control \
+            -n roon-ai \
             -v ${{ needs.plan.outputs.version }} \
             --description "Source-agnostic hi-fi control bridge" \
-            --url "https://github.com/open-horizon-labs/unified-hifi-control" \
+            --url "https://github.com/cfogarty1964/Roon-AI" \
             --license "PolyForm Noncommercial 1.0.0" \
             -a x86_64 \
             --after-install build/linux/postinst.sh \
-            dist/bin/unified-hifi-linux-x64=/usr/bin/unified-hifi-control \
-            build/linux/unified-hifi-control.service=/etc/systemd/system/unified-hifi-control.service
+            dist/bin/roon-ai-linux-x64=/usr/bin/roon-ai \
+            build/linux/roon-ai.service=/etc/systemd/system/roon-ai.service
 
       - name: Build deb package (arm64)
-        if: hashFiles('dist/bin/unified-hifi-linux-arm64') != ''
+        if: hashFiles('dist/bin/roon-ai-linux-arm64') != ''
         run: |
           fpm -s dir -t deb \
-            -n unified-hifi-control \
+            -n roon-ai \
             -v ${{ needs.plan.outputs.version }} \
             --description "Source-agnostic hi-fi control bridge" \
-            --url "https://github.com/open-horizon-labs/unified-hifi-control" \
+            --url "https://github.com/cfogarty1964/Roon-AI" \
             --license "PolyForm Noncommercial 1.0.0" \
             -a arm64 \
             --after-install build/linux/postinst.sh \
-            dist/bin/unified-hifi-linux-arm64=/usr/bin/unified-hifi-control \
-            build/linux/unified-hifi-control.service=/etc/systemd/system/unified-hifi-control.service
+            dist/bin/roon-ai-linux-arm64=/usr/bin/roon-ai \
+            build/linux/roon-ai.service=/etc/systemd/system/roon-ai.service
 
       - name: Build deb package (armv7/armhf)
-        if: hashFiles('dist/bin/unified-hifi-linux-armv7') != ''
+        if: hashFiles('dist/bin/roon-ai-linux-armv7') != ''
         run: |
           fpm -s dir -t deb \
-            -n unified-hifi-control \
+            -n roon-ai \
             -v ${{ needs.plan.outputs.version }} \
             --description "Source-agnostic hi-fi control bridge" \
-            --url "https://github.com/open-horizon-labs/unified-hifi-control" \
+            --url "https://github.com/cfogarty1964/Roon-AI" \
             --license "PolyForm Noncommercial 1.0.0" \
             -a armhf \
             --after-install build/linux/postinst.sh \
-            dist/bin/unified-hifi-linux-armv7=/usr/bin/unified-hifi-control \
-            build/linux/unified-hifi-control.service=/etc/systemd/system/unified-hifi-control.service
+            dist/bin/roon-ai-linux-armv7=/usr/bin/roon-ai \
+            build/linux/roon-ai.service=/etc/systemd/system/roon-ai.service
 
       - name: Upload Linux packages
         uses: actions/upload-artifact@v6
@@ -1652,10 +1651,10 @@ jobs:
 
           | Platform | File |
           |----------|------|
-          | Linux x64 | `unified-hifi-linux-x64` |
-          | Linux ARM64 | `unified-hifi-linux-arm64` |
-          | Linux ARMv7 | `unified-hifi-linux-armv7` |
-          | macOS (Universal) | `unified-hifi-macos-universal` |
+          | Linux x64 | `roon-ai-linux-x64` |
+          | Linux ARM64 | `roon-ai-linux-arm64` |
+          | Linux ARMv7 | `roon-ai-linux-armv7` |
+          | macOS (Universal) | `roon-ai-macos-universal` |
           | Windows x64 | `unified-hifi-win64.exe` |
 
           ### Linux Packages
@@ -1667,7 +1666,7 @@ jobs:
           - `.qpkg` for QNAP
 
           ### LMS Plugin
-          - `lms-unified-hifi-control-*.zip` - Install via LMS Settings > Plugins
+          - `lms-roon-ai-*.zip` - Install via LMS Settings > Plugins
           EOF
 
       - name: Upload to release
@@ -1697,7 +1696,7 @@ jobs:
       - name: Download LMS zip and compute SHA
         id: sha
         run: |
-          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/lms-unified-hifi-control-${{ steps.version.outputs.version }}.zip"
+          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/lms-roon-ai-${{ steps.version.outputs.version }}.zip"
           echo "Downloading $ZIP_URL"
           curl -fSL --retry 3 --retry-delay 5 "$ZIP_URL" -o lms-plugin.zip
           FILE_SIZE=$(stat -c%s lms-plugin.zip 2>/dev/null || stat -f%z lms-plugin.zip)
@@ -1722,11 +1721,11 @@ jobs:
                       version="VERSION_PLACEHOLDER"
                       minTarget="8.0"
                       maxTarget="*">
-                <title lang="EN">Unified Hi-Fi Control</title>
+                <title lang="EN">Roon AI</title>
                 <desc lang="EN">Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer, and hardware knobs. Provides HTTP APIs, MQTT integration, and web UI for controlling your audio system from anywhere.</desc>
                 <url>URL_PLACEHOLDER</url>
                 <sha>SHA_PLACEHOLDER</sha>
-                <creator>Muness Castle</creator>
+                <creator>RooAI</creator>
                 <link>https://forums.lyrion.org/forum/user-forums/3rd-party-hardware/1804977-roon-knob-includes-lms-support</link>
               </plugin>
             </plugins>
@@ -1735,7 +1734,7 @@ jobs:
 
           sed -i 's/^          //' lms-plugin/repo.xml
           sed -i "s|VERSION_PLACEHOLDER|$VERSION|" lms-plugin/repo.xml
-          sed -i "s|URL_PLACEHOLDER|${REPO_URL}/releases/download/v${VERSION}/lms-unified-hifi-control-${VERSION}.zip|" lms-plugin/repo.xml
+          sed -i "s|URL_PLACEHOLDER|${REPO_URL}/releases/download/v${VERSION}/lms-roon-ai-${VERSION}.zip|" lms-plugin/repo.xml
           sed -i "s|SHA_PLACEHOLDER|$SHA|" lms-plugin/repo.xml
 
       - name: Update install.xml version
@@ -1784,11 +1783,11 @@ jobs:
       - name: Publish to AUR
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
-          pkgname: unified-hifi-control-bin
+          pkgname: roon-ai-bin
           pkgbuild: build/arch/PKGBUILD
           assets: |
-            build/arch/unified-hifi-control.service
-            build/arch/unified-hifi-control.install
+            build/arch/roon-ai.service
+            build/arch/roon-ai.install
           commit_username: ${{ github.actor }}
           commit_email: ${{ github.actor }}@users.noreply.github.com
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

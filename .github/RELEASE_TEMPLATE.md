@@ -4,8 +4,8 @@
 
 ```yaml
 services:
-  unified-hifi-control:
-    image: muness/unified-hifi-control:{{VERSION}}
+  roon-ai:
+    image: cfogarty1964/roon-ai:{{VERSION}}
     network_mode: host
     volumes:
       - ./data:/data
@@ -22,20 +22,20 @@ docker compose up -d
 ### QNAP NAS
 
 Download the QPKG package from the assets below:
-- `unified-hifi-control_*_x86_64.qpkg` — Intel/AMD x86_64
-- `unified-hifi-control_*_arm_64.qpkg` — ARM64
+- `roon-ai_*_x86_64.qpkg` — Intel/AMD x86_64
+- `roon-ai_*_arm_64.qpkg` — ARM64
 
 ### Roon Extension Manager
 
-Search for "Unified Hi-Fi Control" in Roon Extension Manager and install.
+Search for "Roon AI" in Roon Extension Manager and install.
 
 ### LMS Plugin
 
 Add this repository URL in LMS Settings → Plugins → Additional Repositories:
 ```
-https://raw.githubusercontent.com/open-horizon-labs/unified-hifi-control/v3/lms-plugin/repo.xml
+https://raw.githubusercontent.com/cfogarty1964/Roon-AI/v3/lms-plugin/repo.xml
 ```
-Then install "Unified Hi-Fi Control" from the plugin list.
+Then install "Roon AI" from the plugin list.
 
 ---
 
@@ -46,7 +46,7 @@ The bridge includes a built-in MCP server. Add to your MCP config (Claude Code, 
 ```json
 {
   "mcpServers": {
-    "unified-hifi-control": {
+    "roon-ai": {
       "type": "http",
       "url": "http://<your-bridge-host>:8088/mcp"
     }

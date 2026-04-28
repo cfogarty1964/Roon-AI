@@ -38,9 +38,9 @@ pub struct RoonConfig {
     pub display_name: Option<String>,
 }
 
-/// Subdirectory name for unified-hifi config files
+/// Subdirectory name for state config files
 /// Issue #76: Organize config files into a subdirectory to avoid clutter
-const CONFIG_SUBDIR_NAME: &str = "unified-hifi";
+const CONFIG_SUBDIR_NAME: &str = "state";
 
 /// Config files that should be migrated to the subdirectory
 const MIGRATABLE_CONFIG_FILES: &[&str] = &[
@@ -50,8 +50,8 @@ const MIGRATABLE_CONFIG_FILES: &[&str] = &[
 
 /// Get config directory (XDG_CONFIG_HOME or platform default)
 pub fn get_config_dir() -> std::path::PathBuf {
-    // Check UHC-specific env var first
-    if let Ok(dir) = std::env::var("UHC_CONFIG_DIR") {
+    // Check ROON_AI-specific env var first
+    if let Ok(dir) = std::env::var("ROON_AI_CONFIG_DIR") {
         return std::path::PathBuf::from(dir);
     }
     // Support Node.js CONFIG_DIR for seamless migration
@@ -63,24 +63,24 @@ pub fn get_config_dir() -> std::path::PathBuf {
     {
         if let Ok(home) = std::env::var("HOME") {
             return std::path::PathBuf::from(home)
-                .join("Library/Application Support/unified-hifi-control");
+                .join("Library/Application Support/roon-ai");
         }
     }
 
     #[cfg(target_os = "linux")]
     {
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            return std::path::PathBuf::from(xdg).join("unified-hifi-control");
+            return std::path::PathBuf::from(xdg).join("roon-ai");
         }
         if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(".config/unified-hifi-control");
+            return std::path::PathBuf::from(home).join(".config/roon-ai");
         }
     }
 
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
-            return std::path::PathBuf::from(appdata).join("unified-hifi-control");
+            return std::path::PathBuf::from(appdata).join("roon-ai");
         }
     }
 
@@ -88,8 +88,8 @@ pub fn get_config_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(".")
 }
 
-/// Get config subdirectory for unified-hifi config files
-/// Issue #76: Organize config files into unified-hifi/ subdirectory
+/// Get config subdirectory for state config files
+/// Issue #76: Organize config files into state/ subdirectory
 pub fn get_config_subdir() -> std::path::PathBuf {
     get_config_dir().join(CONFIG_SUBDIR_NAME)
 }
@@ -120,7 +120,7 @@ pub fn read_config_file(filename: &str) -> Option<String> {
 }
 
 /// Migrate config files from root directory to subdirectory
-/// Issue #76: On startup, move config files to unified-hifi/ subdirectory
+/// Issue #76: On startup, move config files to state/ subdirectory
 pub fn migrate_config_to_subdir() {
     let config_dir = get_config_dir();
     let data_dir = get_data_dir();
@@ -167,7 +167,7 @@ fn migrate_single_file(source_dir: &std::path::Path, subdir: &std::path::Path, f
     match std::fs::rename(&source_path, &subdir_path) {
         Ok(()) => {
             tracing::info!(
-                "Migrated config file: {} -> unified-hifi/{}",
+                "Migrated config file: {} -> state/{}",
                 filename,
                 filename
             );
@@ -188,7 +188,7 @@ fn migrate_single_file(source_dir: &std::path::Path, subdir: &std::path::Path, f
                         );
                     } else {
                         tracing::info!(
-                            "Migrated config file (copy): {} -> unified-hifi/{}",
+                            "Migrated config file (copy): {} -> state/{}",
                             filename,
                             filename
                         );
@@ -204,8 +204,8 @@ fn migrate_single_file(source_dir: &std::path::Path, subdir: &std::path::Path, f
 
 /// Get data directory (XDG_DATA_HOME or platform default)
 pub fn get_data_dir() -> std::path::PathBuf {
-    // Check UHC-specific env var first
-    if let Ok(dir) = std::env::var("UHC_DATA_DIR") {
+    // Check ROON_AI-specific env var first
+    if let Ok(dir) = std::env::var("ROON_AI_DATA_DIR") {
         return std::path::PathBuf::from(dir);
     }
     // Support Node.js CONFIG_DIR for seamless migration (Node.js uses same dir for config and data)
@@ -217,24 +217,24 @@ pub fn get_data_dir() -> std::path::PathBuf {
     {
         if let Ok(home) = std::env::var("HOME") {
             return std::path::PathBuf::from(home)
-                .join("Library/Application Support/unified-hifi-control");
+                .join("Library/Application Support/roon-ai");
         }
     }
 
     #[cfg(target_os = "linux")]
     {
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-            return std::path::PathBuf::from(xdg).join("unified-hifi-control");
+            return std::path::PathBuf::from(xdg).join("roon-ai");
         }
         if let Ok(home) = std::env::var("HOME") {
-            return std::path::PathBuf::from(home).join(".local/share/unified-hifi-control");
+            return std::path::PathBuf::from(home).join(".local/share/roon-ai");
         }
     }
 
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
-            return std::path::PathBuf::from(appdata).join("unified-hifi-control");
+            return std::path::PathBuf::from(appdata).join("roon-ai");
         }
     }
 
@@ -252,16 +252,16 @@ pub fn load_config() -> Result<Config> {
         .add_source(
             ::config::File::with_name(&config_dir.join("config").to_string_lossy()).required(false),
         )
-        // Override with environment variables (UHC_PORT, UHC_ROON__EXTENSION_ID, etc.)
+        // Override with environment variables (ROON_AI_PORT, ROON_AI_ROON__EXTENSION_ID, etc.)
         .add_source(
-            ::config::Environment::with_prefix("UHC")
+            ::config::Environment::with_prefix("ROON_AI")
                 .separator("__")
                 .try_parsing(true),
         );
 
-    // Support PORT env vars with explicit precedence: UHC_PORT > PORT > config > default
+    // Support PORT env vars with explicit precedence: ROON_AI_PORT > PORT > config > default
     // Handle manually to ensure consistent behavior across all environments
-    if let Ok(port) = std::env::var("UHC_PORT") {
+    if let Ok(port) = std::env::var("ROON_AI_PORT") {
         if let Ok(port_num) = port.parse::<u16>() {
             builder = builder.set_override("port", port_num as i64)?;
         }
@@ -355,10 +355,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_port_env_fallback() {
-        // Issue #75: PORT env var should work as fallback when UHC_PORT is not set
-        let _g1 = EnvGuard::set("UHC_CONFIG_DIR", "/tmp/uhc-test-nonexistent");
+        // Issue #75: PORT env var should work as fallback when ROON_AI_PORT is not set
+        let _g1 = EnvGuard::set("ROON_AI_CONFIG_DIR", "/tmp/roon-ai-test-nonexistent");
         let _g2 = EnvGuard::set("PORT", "3000");
-        env::remove_var("UHC_PORT"); // Ensure UHC_PORT not set
+        env::remove_var("ROON_AI_PORT"); // Ensure ROON_AI_PORT not set
 
         let config = load_config().expect("config should load");
 
@@ -367,17 +367,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_uhc_port_takes_precedence_over_port() {
-        // Issue #75: UHC_PORT should take precedence over legacy PORT
-        let _g1 = EnvGuard::set("UHC_CONFIG_DIR", "/tmp/uhc-test-nonexistent");
-        let _g2 = EnvGuard::set("UHC_PORT", "5000");
+    fn test_roon_ai_port_takes_precedence_over_port() {
+        // Issue #75: ROON_AI_PORT should take precedence over legacy PORT
+        let _g1 = EnvGuard::set("ROON_AI_CONFIG_DIR", "/tmp/roon-ai-test-nonexistent");
+        let _g2 = EnvGuard::set("ROON_AI_PORT", "5000");
         let _g3 = EnvGuard::set("PORT", "3000");
 
         let config = load_config().expect("config should load");
 
         assert_eq!(
             config.port, 5000,
-            "UHC_PORT should take precedence over PORT"
+            "ROON_AI_PORT should take precedence over PORT"
         );
     }
 
@@ -385,9 +385,9 @@ mod tests {
     #[serial]
     fn test_invalid_port_uses_default() {
         // Invalid PORT value should fall back to default (8088)
-        let _g1 = EnvGuard::set("UHC_CONFIG_DIR", "/tmp/uhc-test-nonexistent");
+        let _g1 = EnvGuard::set("ROON_AI_CONFIG_DIR", "/tmp/roon-ai-test-nonexistent");
         let _g2 = EnvGuard::set("PORT", "not-a-number");
-        env::remove_var("UHC_PORT"); // Ensure UHC_PORT not set
+        env::remove_var("ROON_AI_PORT"); // Ensure ROON_AI_PORT not set
 
         let config = load_config().expect("config should load");
 
@@ -404,17 +404,17 @@ mod tests {
     #[test]
     #[serial]
     fn test_get_config_subdir_returns_unified_hifi_subdir() {
-        // Issue #76: get_config_subdir() should return unified-hifi/ subdirectory
+        // Issue #76: get_config_subdir() should return state/ subdirectory
         let temp_dir = tempfile::tempdir().expect("create temp dir");
-        env::set_var("UHC_CONFIG_DIR", temp_dir.path());
+        env::set_var("ROON_AI_CONFIG_DIR", temp_dir.path());
 
         let subdir = get_config_subdir();
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         assert!(
-            subdir.ends_with("unified-hifi"),
-            "subdir should end with 'unified-hifi', got: {:?}",
+            subdir.ends_with("state"),
+            "subdir should end with 'state', got: {:?}",
             subdir
         );
         assert_eq!(
@@ -437,15 +437,15 @@ mod tests {
             std::fs::write(config_dir.join(file), r#"{"test": true}"#).expect("write file");
         }
 
-        env::set_var("UHC_CONFIG_DIR", config_dir);
+        env::set_var("ROON_AI_CONFIG_DIR", config_dir);
 
         // Run migration
         migrate_config_to_subdir();
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         // Verify files moved to subdirectory
-        let subdir = config_dir.join("unified-hifi");
+        let subdir = config_dir.join("state");
         assert!(subdir.exists(), "subdirectory should be created");
 
         for file in &files {
@@ -468,7 +468,7 @@ mod tests {
         // Issue #76: If subdir already has files, don't overwrite them
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let config_dir = temp_dir.path();
-        let subdir = config_dir.join("unified-hifi");
+        let subdir = config_dir.join("state");
 
         // Create subdirectory with existing config
         std::fs::create_dir_all(&subdir).expect("create subdir");
@@ -479,11 +479,11 @@ mod tests {
         std::fs::write(config_dir.join("app-settings.json"), r#"{"root": true}"#)
             .expect("write root");
 
-        env::set_var("UHC_CONFIG_DIR", config_dir);
+        env::set_var("ROON_AI_CONFIG_DIR", config_dir);
 
         migrate_config_to_subdir();
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         // Verify existing subdir file was not overwritten
         let content =
@@ -500,18 +500,18 @@ mod tests {
         // Issue #76: get_config_file_path() should check subdir first, fall back to root
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let config_dir = temp_dir.path();
-        let subdir = config_dir.join("unified-hifi");
+        let subdir = config_dir.join("state");
 
         // Create file only in subdir
         std::fs::create_dir_all(&subdir).expect("create subdir");
         std::fs::write(subdir.join("lms-config.json"), r#"{"subdir": true}"#)
             .expect("write subdir");
 
-        env::set_var("UHC_CONFIG_DIR", config_dir);
+        env::set_var("ROON_AI_CONFIG_DIR", config_dir);
 
         let path = get_config_file_path("lms-config.json");
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         assert_eq!(path, subdir.join("lms-config.json"));
     }
@@ -528,17 +528,17 @@ mod tests {
         std::fs::write(config_dir.join("lms-config.json"), r#"{"root": true}"#)
             .expect("write root");
 
-        env::set_var("UHC_CONFIG_DIR", config_dir);
+        env::set_var("ROON_AI_CONFIG_DIR", config_dir);
 
         let path = get_config_file_path("lms-config.json");
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         // Should return subdir path (for new writes), even though file exists at root
         // The file reading logic handles fallback
         assert!(
-            path.to_string_lossy().contains("unified-hifi"),
-            "path should be in unified-hifi subdir for new writes"
+            path.to_string_lossy().contains("state"),
+            "path should be in state subdir for new writes"
         );
     }
 
@@ -553,11 +553,11 @@ mod tests {
         std::fs::write(config_dir.join("lms-config.json"), r#"{"legacy": true}"#)
             .expect("write root");
 
-        env::set_var("UHC_CONFIG_DIR", config_dir);
+        env::set_var("ROON_AI_CONFIG_DIR", config_dir);
 
         let content = read_config_file("lms-config.json");
 
-        env::remove_var("UHC_CONFIG_DIR");
+        env::remove_var("ROON_AI_CONFIG_DIR");
 
         assert!(content.is_some(), "should find legacy file at root");
         assert!(

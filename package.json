@@ -1,18 +1,18 @@
 {
-  "name": "unified-hifi-control",
+  "name": "roon-ai",
   "version": "3.0.0-rc.1",
   "description": "Source-agnostic hi-fi control bridge for hardware surfaces and Home Assistant",
   "bin": {
-    "unified-hifi-control-mcp": "mcp/index.js"
+    "roon-ai-mcp": "mcp/index.js"
   },
   "scripts": {
     "mcp": "node mcp/index.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/open-horizon-labs/unified-hifi-control.git"
+    "url": "git+https://github.com/cfogarty1964/Roon-AI.git"
   },
-  "author": "Muness Castle",
+  "author": "RooAI",
   "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -26,9 +26,9 @@
   "keywords": [],
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/open-horizon-labs/unified-hifi-control/issues"
+    "url": "https://github.com/cfogarty1964/Roon-AI/issues"
   },
-  "homepage": "https://github.com/open-horizon-labs/unified-hifi-control#readme",
+  "homepage": "https://github.com/cfogarty1964/Roon-AI#readme",
   "devDependencies": {
     "@playwright/test": "^1.58.0"
   }

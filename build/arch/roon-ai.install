@@ -1,0 +1,35 @@
+# Arch Linux install script for roon-ai
+
+post_install() {
+    echo ":: Roon AI installed"
+    echo ":: To enable and start the service:"
+    echo "   systemctl enable --now roon-ai"
+    echo ":: Web UI available at http://localhost:8088"
+    echo ":: Configuration: /etc/roon-ai/"
+}
+
+post_upgrade() {
+    echo ":: Roon AI upgraded"
+    if systemctl is-active --quiet roon-ai; then
+        echo ":: Restarting service..."
+        systemctl restart roon-ai
+    fi
+}
+
+pre_remove() {
+    if systemctl is-active --quiet roon-ai; then
+        echo ":: Stopping roon-ai service..."
+        systemctl stop roon-ai
+    fi
+    if systemctl is-enabled --quiet roon-ai 2>/dev/null; then
+        echo ":: Disabling roon-ai service..."
+        systemctl disable roon-ai
+    fi
+}
+
+post_remove() {
+    echo ":: Roon AI removed"
+    echo ":: Configuration files in /etc/roon-ai/ were preserved"
+    echo ":: State data in /var/lib/roon-ai/ was preserved"
+    echo ":: Remove manually if no longer needed"
+}

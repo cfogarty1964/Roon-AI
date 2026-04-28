@@ -1,26 +1,26 @@
 [Unit]
-Description=Unified Hi-Fi Control Bridge
-Documentation=https://github.com/open-horizon-labs/unified-hifi-control
+Description=Roon AI Bridge
+Documentation=https://github.com/cfogarty1964/Roon-AI
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/var/lib/unified-hifi-control
-ExecStart=/usr/bin/unified-hifi-control
+WorkingDirectory=/var/lib/roon-ai
+ExecStart=/usr/bin/roon-ai
 Restart=always
 RestartSec=10
 
 # Environment
 Environment=PORT=8088
-Environment=CONFIG_DIR=/etc/unified-hifi-control
-Environment=DATA_DIR=/var/lib/unified-hifi-control
+Environment=CONFIG_DIR=/etc/roon-ai
+Environment=DATA_DIR=/var/lib/roon-ai
 Environment=RUST_LOG=info
 
 # Run as dedicated user (created dynamically)
 DynamicUser=yes
-StateDirectory=unified-hifi-control
-ConfigurationDirectory=unified-hifi-control
+StateDirectory=roon-ai
+ConfigurationDirectory=roon-ai
 
 # Security hardening
 NoNewPrivileges=true
@@ -34,7 +34,7 @@ RestrictNamespaces=true
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=unified-hifi-control
+SyslogIdentifier=roon-ai
 
 [Install]
 WantedBy=multi-user.target

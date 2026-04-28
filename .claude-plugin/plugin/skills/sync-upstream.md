@@ -27,8 +27,8 @@ Sync the saas main branch with the open source upstream v3 branch.
 
 ## Remotes
 
-- `origin`: Open source repo (open-horizon-labs/unified-hifi-control)
-- `saas`: Private fork (open-horizon-labs/unified-hifi-control-saas)
+- `origin`: Open source repo (cfogarty1964/Roon-AI)
+- `saas`: Private fork (cfogarty1964/Roon-AI-saas)
 
 ## After Syncing
 

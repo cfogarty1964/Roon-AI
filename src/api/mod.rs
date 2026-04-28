@@ -111,8 +111,8 @@ pub async fn status_handler(State(state): State<AppState>) -> Json<StatusRespons
 
     Json(StatusResponse {
         service: "roon-ai",
-        version: env!("UHC_VERSION"),
-        git_sha: env!("UHC_GIT_SHA"),
+        version: env!("ROON_AI_VERSION"),
+        git_sha: env!("ROON_AI_GIT_SHA"),
         uptime_secs: state.start_time.elapsed().as_secs(),
         roon_connected: roon_status.connected,
         upnp_devices: upnp_status.renderer_count,

@@ -141,7 +141,7 @@ Recompiles and refreshes the browser on changes to `src/`.
 ### Override Config Directory
 
 ```powershell
-$env:UHC_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
+$env:ROON_AI_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
 .\target\release\roon-ai.exe
 ```
 
@@ -149,7 +149,7 @@ $env:UHC_CONFIG_DIR=".\local-data"; $env:RUST_LOG="debug"
 
 ## Configuration
 
-Config is stored in `%APPDATA%\unified-hifi-control\` (Windows default — preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs) or the directory set by `UHC_CONFIG_DIR`.
+Config is stored in `%APPDATA%\roon-ai\` (Windows default — preserved from earlier release; not renamed in the binary rename to avoid breaking existing installs) or the directory set by `ROON_AI_CONFIG_DIR`.
 
 **Main config** (`config.toml`):
 ```toml
@@ -187,7 +187,7 @@ Add to `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "unified-hifi-control": {
+    "roon-ai": {
       "type": "http",
       "url": "http://localhost:8088/mcp"
     }
