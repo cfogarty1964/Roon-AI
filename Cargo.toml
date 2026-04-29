@@ -1,6 +1,6 @@
 [package]
 name = "roon-ai"
-version = "3.8.0"  # CI overrides via ROON_AI_VERSION env var from git tag
+version = "3.8.1"  # CI overrides via ROON_AI_VERSION env var from git tag
 edition = "2021"
 authors = ["RooAI"]
 description = "Natural-language Roon control bridge with conversational AI agent and MCP server"

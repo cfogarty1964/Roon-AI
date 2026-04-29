@@ -25,6 +25,53 @@ struct ConversationMeta {
     title: String,
 }
 
+/// Time-aware preset buttons rendered above the chat input. Each preset is
+/// `(emoji, label, prompt, start_hour, end_hour)`. Clicking submits the
+/// `prompt` as a fresh chat turn — Claude resolves it against the selected
+/// zone and recent listening history exactly like a typed message would.
+///
+/// `start_hour..end_hour` is the local-time range that highlights the preset
+/// as the "obvious pick right now" with a subtle primary ring. Hours wrap at
+/// midnight (Wind Down's range is 21..5 = "9pm to 5am next day"). Clicks work
+/// outside the active range too — the highlighting is just a hint.
+const TIME_PRESETS: &[(&str, &str, &str, u32, u32)] = &[
+    ("🌅", "Morning", "Play some gentle, uplifting morning music", 5, 11),
+    ("💪", "Workout", "Play upbeat, energetic music for a workout", 11, 17),
+    ("🍽️", "Dinner", "Play warm jazz or bossa nova for dinner", 17, 21),
+    ("🌙", "Wind Down", "Play calm ambient or piano to wind down", 21, 5),
+];
+
+#[cfg(target_arch = "wasm32")]
+fn current_local_hour() -> u32 {
+    js_sys::Date::new_0().get_hours()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn current_local_hour() -> u32 {
+    // SSR fallback — never user-facing in practice. Default to mid-afternoon
+    // so a preset is highlighted; tests don't depend on this value.
+    14
+}
+
+/// Index into `TIME_PRESETS` of the preset whose hour-range covers the
+/// current local time. Returns 0 (Morning) if nothing matches (shouldn't
+/// happen — the four ranges tile 24h — but be defensive).
+fn current_preset_index() -> usize {
+    let h = current_local_hour();
+    for (i, &(_, _, _, start, end)) in TIME_PRESETS.iter().enumerate() {
+        let in_range = if start <= end {
+            h >= start && h < end
+        } else {
+            // Wrap-around range (e.g. 21..5 = 9pm-5am next day)
+            h >= start || h < end
+        };
+        if in_range {
+            return i;
+        }
+    }
+    0
+}
+
 /// Ordered fragment of a streaming assistant reply. Text deltas and tool
 /// calls are interleaved in the order they arrive so the UI can render
 /// inline `⚡ tool` pills exactly where the agent paused. In-memory only —
@@ -2189,6 +2236,47 @@ pub fn ConversationalAi() -> Element {
 
                         // The in-progress assistant bubble's pulsing cursor is
                         // now the loading indicator (see is_streaming branch above).
+                    }
+
+                    // Time-aware preset buttons — one tap submits a canned
+                    // prompt for "the right music for right now". The preset
+                    // matching the local hour gets a subtle primary ring as
+                    // a hint; all four are tappable any time.
+                    {
+                        let active_idx = current_preset_index();
+                        let busy = *loading.read() || *listening.read();
+                        rsx! {
+                            div { class: "flex flex-wrap gap-2 mt-2",
+                                for (i, &(emoji, label, prompt, _, _)) in TIME_PRESETS.iter().enumerate() {
+                                    {
+                                        let prompt_owned = prompt.to_string();
+                                        let is_active = i == active_idx;
+                                        rsx! {
+                                            button {
+                                                key: "{label}",
+                                                class: if is_active {
+                                                    "px-3 py-1.5 rounded-full text-xs border border-primary/40 bg-primary/10 hover:bg-primary/20 disabled:opacity-50 transition-colors"
+                                                } else {
+                                                    "px-3 py-1.5 rounded-full text-xs border border-border bg-muted/30 hover:bg-muted disabled:opacity-50 transition-colors"
+                                                },
+                                                title: "{prompt}",
+                                                disabled: busy,
+                                                onclick: move |_| do_send_text(
+                                                    prompt_owned.clone(),
+                                                    messages,
+                                                    loading,
+                                                    selected_zone,
+                                                    speech,
+                                                    current_track,
+                                                    recent_tracks,
+                                                ),
+                                                "{emoji} {label}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     div { class: "flex gap-2 sticky bottom-4 mt-2",

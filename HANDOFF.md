@@ -3584,3 +3584,65 @@ Still on the table from the playbook (in priority order):
 | I — Track-love (protocol RE) | 4-8h speculative | Not started |
 
 **My pick**: **E (time-aware presets, ~1h)** if you want a quick polish win, or **C (sidebar, ~half day)** if conversations are starting to accumulate. **D (MQTT)** if you have Home Assistant running and want HA conditional automations.
+
+---
+
+## Recent Work (2026-04-29) — v3.8.1: Time-aware presets
+
+Plan E from the playbook. Four pill buttons sit above the chat input — 🌅 Morning, 💪 Workout, 🍽️ Dinner, 🌙 Wind Down — each submitting a canned chat turn for "the right music for right now". The preset matching the local-time hour gets a subtle primary-color ring as a hint, but all four are tappable any time.
+
+### How it works
+
+- `TIME_PRESETS` const at the top of `conversational_ai.rs` maps `(emoji, label, prompt, start_hour, end_hour)`. Hours are 24h local time; ranges tile the day:
+  - Morning: 5–11
+  - Workout: 11–17
+  - Dinner: 17–21
+  - Wind Down: 21–5 (wraps midnight)
+- `current_preset_index()` reads `js_sys::Date::new_0().get_hours()` and finds the index whose range covers the current hour. SSR fallback returns 14 (afternoon → Workout) but never user-facing.
+- Each click submits the prompt via the existing `do_send_text(...)` — Claude resolves it against the selected zone + recent listening history exactly like a typed message.
+- Disabled while a request is in flight or the mic is open (so a button-tap doesn't interrupt STT capture).
+
+### Why static prompts (not editable yet)
+
+The plan called out a stretch goal of localStorage-persisted user-customised templates with a Settings UI. Skipped for v1 — four well-chosen defaults are likely good enough. Easy to add later if real usage surfaces "I always want Spanish guitar at dinner": add a `roon-ai-presets` localStorage key + a Settings section that edits the prompt strings. The preset row would read from that signal instead of the const.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Version bump 3.8.0 → 3.8.1 |
+| `src/app/pages/conversational_ai.rs` | Added `TIME_PRESETS` const + `current_local_hour()` + `current_preset_index()` helpers; rendered preset row above the input bar with active-preset highlighting |
+
+No new endpoints, no new dependencies. ~70 lines of net change.
+
+### Verification
+
+- `cargo check` — both targets clean
+- `cargo test --features server` — 117 passed
+- Tailwind 137 ms; dx 164 s; cargo release 2:21
+- Live binary: `version=3.8.1`, preset row visible above the input area, active preset (Workout for the 14:00 test time) had the primary ring
+
+### Behaviour changes for users
+
+- **Above the chat input**: 🌅 Morning · 💪 Workout · 🍽️ Dinner · 🌙 Wind Down
+- The one matching the current hour has a subtle highlight ring — usually the obvious pick at any given time
+- Tap any of them to submit a fresh "play X" request to whichever zone is selected
+- Useful when starting a new conversation OR when you want to switch styles mid-session
+
+### What's actually next
+
+The cheapest remaining wins from the playbook:
+
+| Item | Effort | Status |
+|---|---|---|
+| A — Wake word activation | ~5 min | 🟡 Awaiting Picovoice approval |
+| C — Conversation sidebar | half day | Not started |
+| D — MQTT bridge for HA | half day | Not started |
+| F — Auto-fetch album tracks | half day | Not started |
+| G — mkcert local CA | half day | Not started |
+| H — Release-pipeline housekeeping | ~2h | Not started |
+| I — Track-love (protocol RE) | 4-8h speculative | Not started |
+
+Daily-use polish is now genuinely complete — voice in/out, streaming TTS, history awareness, ✨ Similar, replay, album popup, auto-titles, **media keys**, **time presets**. Anything beyond this is either situational (HA → D, multi-chat → C, multi-device → G) or deferred (I needs protocol RE, A needs Picovoice).
+
+**My pick if you keep coding**: **C (sidebar)** if your conversations are accumulating, or **D (MQTT)** if you actually have Home Assistant running. Otherwise, **settle in** — five tagged releases in the last 36 hours and the surface is mature enough that real usage should drive the next priority.
