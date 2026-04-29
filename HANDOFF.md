@@ -3232,3 +3232,112 @@ The post-v3.6.0 quick-win tier is done. Remaining brainstorm:
 | — | Per-message 🔊 replay button | — | ✅ Done (2026-04-29) |
 
 If voice approval lands: vendor the Porcupine assets (Phase 2 is one settings toggle away from working). Otherwise: **#3 media keys** is the next-largest UX win for daily use, **#7 time-aware presets** is the cheapest remaining feature, and **#10 sidebar** matters more if multiple conversations accumulate (the dropdown UI starts feeling cramped past ~10 chats).
+
+---
+
+## Where We Stand — Status After v3.7.0 (2026-04-29)
+
+### Today's shipping arc
+
+Two tags pushed today, three the day before. Five tags total in this run (`v3.5.0` → `v3.7.0`):
+
+| Tag | What |
+|---|---|
+| **v3.5.0** | HTTPS / self-signed cert (LAN mic unblocked) |
+| **v3.6.0** | OpenAI TTS · per-token streaming · history-aware prompt · wake-word scaffolding (dormant) |
+| **v3.7.0** | Album popup · per-message replay · auto-title via Haiku · ✨ Similar |
+
+23+ commits since v3.5.0. All on `cfogarty/v3` at https://github.com/cfogarty1964/Roon-AI.
+
+### What's actually live for daily use
+
+`https://localhost:8088` — Conversational AI page now offers:
+
+**Voice mode**
+- OpenAI cloud voices (Alloy, Echo, Fable, Onyx, Nova, Shimmer) alongside browser voices
+- Per-sentence streaming TTS — spoken reply starts ~1–2 s after the user stops talking
+- Voice picker on Settings; Speak / Hands-free toggles in the chat header
+- Per-message 🔊 Replay button on every assistant bubble
+- Mic works on LAN (HTTPS unblocked it in v3.5.0)
+
+**Conversation surface**
+- Streaming replies with persistent inline ⚡ tool-call pills
+- Multi-conversation dropdown with "+ New" and context-aware Clear/Delete
+- **Auto-titles via Haiku** — first the substring placeholder, then a 2-4 word Title-Case version
+- Persistent localStorage history per conversation
+- ▶ Play suggestion rows under recommendations
+
+**Now-playing banner**
+- Album thumbnail with **in-page lightbox popup** (click to view full-size; ESC or click anywhere to close)
+- Track / artist / album text, "Now playing" / "On deck" pill
+- Transport: ⏮ ⏯/⏸ ⏭
+- 📻 Start Radio (Roon zones)
+- **✨ Similar** — Haiku suggests 3-5 tracks similar in mood/genre/era; ▶ Play any to enqueue
+- Volume slider (Roon zones with VolumeControl)
+- Default-zone star
+
+**Behind the scenes**
+- History-aware system prompt (last 3 played tracks fed to Claude on every request)
+- Streaming SSE bridge with sentence-boundary chunking on the JS side
+- Wake-word framework wired but dormant (awaits user Picovoice setup)
+- Hidden console + rolling daily logs at `%LOCALAPPDATA%\roon-ai\logs\`
+- Windows tray icon + Startup-folder shortcut
+- TLS cert auto-generated at `%LOCALAPPDATA%\roon-ai\certs\` (long-lived, SAN auto-detects LAN IPs)
+
+### Candidate list — what's done vs what's left
+
+| # | Item | Effort | Status |
+|---|---|---|---|
+| 1 | Wake word ("Hey Roon AI") via Picovoice | half day | 🟡 Scaffolded; awaits Picovoice approval + asset vendoring |
+| 2 | ~~Auto-start + system tray~~ | — | ✅ Done (v3.4 era) |
+| 3 | Media keys (SMTC on Windows) | half day | Not started |
+| 4 | ~~History-aware system prompt~~ | — | ✅ Done (v3.6.0) |
+| 5 | ~~Per-token TTS streaming~~ | — | ✅ Done (v3.6.0) |
+| 6 | ~~"Similar to this" suggestion row~~ | — | ✅ Done (v3.7.0) |
+| 7 | Time-aware presets (morning/evening/dinner) | ~1h | Not started |
+| 8 | MQTT bridge for Home Assistant | half day | Not started |
+| 9 | ~~Auto-title via Claude~~ | — | ✅ Done (v3.7.0) |
+| 10 | Sidebar UI for conversations | half day | Not started |
+| — | ~~Album-art popup (was: new tab)~~ | — | ✅ Done (v3.7.0) |
+| — | ~~Per-message 🔊 replay button~~ | — | ✅ Done (v3.7.0) |
+| — | Auto-fetch album tracks for context | half day | Not started |
+| — | mkcert local CA (eliminate cert warning) | half day | Not started |
+
+### Housekeeping (only matters before a public tagged release)
+
+- **LMS plugin job removal from CI** — `build-lms-universal` + `update-lms-repo` in `.github/workflows/build.yml` reference the deleted `lms-plugin/` directory. Gated behind workflow_dispatch so they don't fire on routine pushes; still dead code. ~30 min.
+- **Release artifact-name rename** — Synology SPK / QNAP QPKG / Linux deb-rpm install paths (`/usr/bin/roon-ai`, `roon-ai.service`), Arch AUR package name. All workflow_dispatch / release-tag-only, don't fire routinely. Worth doing before the next signed release. ~1–2h.
+- **mkcert local CA** — replace self-signed cert with one trusted by browsers. Eliminates the cert warning when adding new devices. Half day.
+
+### Long-deferred ideas (still valid; revisit only if real usage surfaces friction)
+
+- **Track-love feature** — Roon's official UI surfaces Love via an undocumented service the rust-roon-api crate doesn't implement. Implementing would require WebSocket protocol reverse-engineering with mitmproxy. 4-8h speculation.
+- **Custom voice cloning** (ElevenLabs ~10× OpenAI TTS cost) — only if studio voice quality is wanted.
+- **Per-zone preferences** — different default voice / TTS settings per zone. Nice-to-have for multi-room.
+- **Conversation summarization** — when token budget matters in a long-running chat, summarise older turns. Currently <10c per long session, so no urgency.
+- **Per-message timestamps** — useful for conversation review, easy.
+- **Conversation pinning / archive** — pairs with the sidebar (#10).
+
+### What's actually live vs documentation
+
+The two endpoints added in v3.7.0 (`POST /api/ai/title`, `POST /api/ai/similar`) are also reachable via `curl` for any external caller, though they're documented only here. Neither has API auth — same trust model as `/api/ai/chat` (LAN-trusted).
+
+The fixture `tests/fixtures/api_routes.txt` reflects the current contract. Routes in the integration smoke matrix:
+- `POST /api/ai/chat` (legacy non-streaming agent)
+- `POST /api/ai/chat/stream` (active SSE agent endpoint used by the page)
+- `POST /api/ai/similar` (✨ Similar — Haiku)
+- `POST /api/ai/title` (auto-title — Haiku)
+- `POST /api/tts` (OpenAI TTS proxy)
+- `POST /api/settings`
+
+### Recommendation
+
+**Settle in.** Five tagged releases in 36 hours; the surface is now mature enough that real usage will surface what to do next better than guessing. Real next moves:
+
+- **If voice approval lands** → vendor the Porcupine assets (Phase 2 activates).
+- **If you keep coding** → **#3 media keys** is the next-largest daily-use win.
+- **If you start using multiple conversations heavily** → **#10 sidebar**.
+- **If you have Home Assistant** → **#8 MQTT bridge**.
+- **If you want a 1-hour win** → **#7 time-aware presets**.
+
+The conversational AI surface is feature-complete for single-user voice control. Everything remaining is either situational (depends on whether you have HA / multiple chats / heavy voice usage) or housekeeping (release-pipeline cleanup).
