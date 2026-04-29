@@ -3649,6 +3649,34 @@ Daily-use polish is now genuinely complete — voice in/out, streaming TTS, hist
 
 ---
 
+## Recent Work (2026-04-29) — H release-pipeline housekeeping
+
+Plan H from the playbook. Pure CI/packaging cleanup — no version bump, no tag, no user-visible change.
+
+### What landed
+
+- **LMS removed from CI**: dropped `build-lms-universal` and `update-repo-xml` jobs, plus all the plumbing (workflow_dispatch input, plan output, env vars, decision logic, label paths, `*.zip` find filters, summary needs).
+- **Windows binary renamed**: `unified-hifi-win64.exe` → `roon-ai-win64.exe`. Updated the binary output, flatten step, summary find pattern, and release-assets table.
+- **WiX MSI rebrand** (`build/windows/installer.wxs`): env var `UNIFIED_HIFI_CONFIG_DIR` → `ROON_AI_CONFIG_DIR` (this was actually a bug — the binary reads the `ROON_AI_*` form, so any MSI built from the prior file would have set the wrong env var). Service name + registry key + manufacturer rebranded from `CloudAtlas`/`UnifiedHiFiControl` to `RooAI`/`RoonAI`.
+- **Stale package descriptions cleaned**: "Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer, hardware knobs" → "Conversational AI control bridge for Roon" across `RELEASE_TEMPLATE.md`, Synology `INFO` + `package.json`, QNAP `qpkg.cfg`, Arch `PKGBUILD` (+ template), macOS `welcome.html` + `conclusion.html`.
+- **Synology maintainer**: "Open Horizon Labs" → "RooAI" (last `Open Horizon` artefact in the live tree).
+
+### Service-file consistency check
+
+- `build/linux/roon-ai.service` and `build/arch/roon-ai.service` are byte-identical ✅
+- `build/arch/roon-ai.install` references `roon-ai.service`, `/etc/roon-ai/`, `/var/lib/roon-ai/` — consistent with the service unit's `ConfigurationDirectory=roon-ai` + `StateDirectory=roon-ai` ✅
+- Linux deb/rpm uses `postinst.sh` instead of an `.install` (Arch-specific concept) — no leftover gaps
+
+### Net diff
+
+10 files, **+29 / −279**. Workflow YAML + JSON + WiX XML all parse clean. Commit `633acf4` on `v3`.
+
+### Why no tag
+
+H is purely release-pipeline cleanup; nothing user-visible. The HANDOFF originally said "bundle into v3.8.0 cleanup commit, or whenever the next public release is needed." Since the next release isn't imminent, this just sits on `v3` as housekeeping that the next tag run will pick up.
+
+---
+
 ## Where We Stand — Status After v3.8.1 (2026-04-29 evening)
 
 ### Recent shipping arc
@@ -3716,7 +3744,7 @@ All on `cfogarty/v3` at https://github.com/cfogarty1964/Roon-AI.
 | E — ~~Time-aware presets~~ | — | ✅ v3.8.1 |
 | F — Auto-fetch album tracks | half day | Not started |
 | G — mkcert local CA | half day | Not started |
-| H — Release-pipeline housekeeping | ~2h | Not started |
+| H — ~~Release-pipeline housekeeping~~ | — | ✅ done (commit `633acf4`, no tag) |
 | I — Track-love (protocol RE) | 4-8h speculative | Not started |
 
 Of the original 10 brainstorm items, **8 are done**: streaming TTS, history-aware prompt, ✨ similar, auto-title, sidebar dropdown (MVP), media keys, time presets, plus the album popup and replay polish that landed alongside. Only #1 (wake word, gated) and #3-style polish remain.
@@ -3744,6 +3772,7 @@ Real next moves, ranked by who they apply to:
 - **If conversations pile up past ~10** → C (sidebar, ~half day) replaces the dropdown
 - **If sharing across multiple devices on the LAN gets tedious** → G (mkcert, ~half day) eliminates cert warnings
 - **If you want polish-for-its-own-sake** → F (auto-fetch album tracks, ~half day) inlines track lists when the AI mentions an album
-- **Before any signed public release** → H (CI cleanup, ~2h) — LMS-job removal + artifact rename
 
 Or — and this is the most honest answer at this point — **just use it for a week.** The conversational AI page does meaningfully more today than it did yesterday morning. What surfaces as friction in real daily use is a better signal than any priority guess from this seat.
+
+**Decision (2026-04-29)**: settling in. Real-usage feedback drives the next priority. No coding planned for the next ~7 days unless something breaks.
