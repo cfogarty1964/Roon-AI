@@ -29,14 +29,6 @@ Download the QPKG package from the assets below:
 
 Search for "Roon AI" in Roon Extension Manager and install.
 
-### LMS Plugin
-
-Add this repository URL in LMS Settings → Plugins → Additional Repositories:
-```
-https://raw.githubusercontent.com/cfogarty1964/Roon-AI/v3/lms-plugin/repo.xml
-```
-Then install "Roon AI" from the plugin list.
-
 ---
 
 ## MCP Server (Claude Integration)
@@ -60,4 +52,4 @@ Replace `<your-bridge-host>` with your bridge IP or hostname (e.g., `localhost`,
 
 ## Configuration
 
-Configure all backends (Roon, LMS, HQPlayer, UPnP/OpenHome) via the web UI at `http://<your-bridge-host>:8088`.
+Configure Roon and other settings via the web UI at `http://<your-bridge-host>:8088`.

@@ -12,10 +12,6 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      build_lms:
-        description: 'Build LMS plugin'
-        type: boolean
-        default: false
       build_synology:
         description: 'Build Synology SPK'
         type: boolean
@@ -69,7 +65,6 @@ jobs:
       build_linux_arm: ${{ steps.decide.outputs.build_linux_arm }}
       build_macos: ${{ steps.decide.outputs.build_macos }}
       build_windows: ${{ steps.decide.outputs.build_windows }}
-      build_lms: ${{ steps.decide.outputs.build_lms }}
       build_synology: ${{ steps.decide.outputs.build_synology }}
       build_qnap: ${{ steps.decide.outputs.build_qnap }}
       build_qnap_arm: ${{ steps.decide.outputs.build_qnap_arm }}
@@ -116,8 +111,6 @@ jobs:
           HAS_LABEL_LINUX_ARM: ${{ contains(github.event.pull_request.labels.*.name, 'build:linux-arm') }}
           HAS_LABEL_MACOS: ${{ contains(github.event.pull_request.labels.*.name, 'build:macos') }}
           HAS_LABEL_WINDOWS: ${{ contains(github.event.pull_request.labels.*.name, 'build:windows') }}
-          HAS_LABEL_LMS: ${{ contains(github.event.pull_request.labels.*.name, 'build:lms') }}
-          HAS_LABEL_LMS_MACOS: ${{ contains(github.event.pull_request.labels.*.name, 'build:lms-macos') }}
           HAS_LABEL_SYNOLOGY: ${{ contains(github.event.pull_request.labels.*.name, 'build:synology') }}
           HAS_LABEL_QNAP: ${{ contains(github.event.pull_request.labels.*.name, 'build:qnap') }}
           HAS_LABEL_QNAP_ARM: ${{ contains(github.event.pull_request.labels.*.name, 'build:qnap-arm') }}
@@ -127,7 +120,6 @@ jobs:
           INPUT_LINUX_ARM: ${{ inputs.build_linux_arm }}
           INPUT_MACOS: ${{ inputs.build_macos }}
           INPUT_WINDOWS: ${{ inputs.build_windows }}
-          INPUT_LMS: ${{ inputs.build_lms }}
           INPUT_SYNOLOGY: ${{ inputs.build_synology }}
           INPUT_QNAP: ${{ inputs.build_qnap }}
           INPUT_QNAP_ARM: ${{ inputs.build_qnap_arm }}
@@ -145,13 +137,11 @@ jobs:
             echo "build_linux_arm=false" >> $GITHUB_OUTPUT
             echo "build_macos=false" >> $GITHUB_OUTPUT
             echo "build_windows=false" >> $GITHUB_OUTPUT
-            echo "build_lms=false" >> $GITHUB_OUTPUT
             echo "build_synology=false" >> $GITHUB_OUTPUT
             echo "build_qnap=false" >> $GITHUB_OUTPUT
             echo "build_qnap_arm=false" >> $GITHUB_OUTPUT
             echo "build_docker=false" >> $GITHUB_OUTPUT
             echo "build_linux_packages=false" >> $GITHUB_OUTPUT
-            echo "lms_matrix=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -185,11 +175,10 @@ jobs:
           if [[ "$INPUT_LINUX_PACKAGES" == "true" ]]; then BUILD_LINUX_ARM="true"; fi
           echo "build_linux_arm=$BUILD_LINUX_ARM" >> $GITHUB_OUTPUT
 
-          # macOS: also triggered by build:lms-macos label
+          # macOS
           BUILD_MACOS="false"
           if should_build; then BUILD_MACOS="true"; fi
           if [[ "$HAS_LABEL_MACOS" == "true" ]]; then BUILD_MACOS="true"; fi
-          if [[ "$HAS_LABEL_LMS_MACOS" == "true" ]]; then BUILD_MACOS="true"; fi
           if [[ "$INPUT_MACOS" == "true" ]]; then BUILD_MACOS="true"; fi
           echo "build_macos=$BUILD_MACOS" >> $GITHUB_OUTPUT
 
@@ -199,14 +188,6 @@ jobs:
           if [[ "$HAS_LABEL_WINDOWS" == "true" ]]; then BUILD_WINDOWS="true"; fi
           if [[ "$INPUT_WINDOWS" == "true" ]]; then BUILD_WINDOWS="true"; fi
           echo "build_windows=$BUILD_WINDOWS" >> $GITHUB_OUTPUT
-
-          # LMS Plugin: also triggered by build:lms-macos label
-          BUILD_LMS="false"
-          if should_build; then BUILD_LMS="true"; fi
-          if [[ "$HAS_LABEL_LMS" == "true" ]]; then BUILD_LMS="true"; fi
-          if [[ "$HAS_LABEL_LMS_MACOS" == "true" ]]; then BUILD_LMS="true"; fi
-          if [[ "$INPUT_LMS" == "true" ]]; then BUILD_LMS="true"; fi
-          echo "build_lms=$BUILD_LMS" >> $GITHUB_OUTPUT
 
           # Synology
           BUILD_SYNOLOGY="false"
@@ -269,15 +250,8 @@ jobs:
             HAS_OPTIONAL="true"
           }
 
-          if [[ "$BUILD_LMS" == "true" ]]; then
-            if [[ "$IS_RELEASE_TRIGGER" == "true" ]]; then add_row "lms" "$RELEASE_TRIGGER_NAME"
-            elif [[ "$HAS_LABEL_LMS_MACOS" == "true" ]]; then add_row "lms" "build:lms-macos"
-            elif [[ "$HAS_LABEL_LMS" == "true" ]]; then add_row "lms" "build:lms"
-            fi
-          fi
           if [[ "$BUILD_MACOS" == "true" ]]; then
             if [[ "$IS_RELEASE_TRIGGER" == "true" ]]; then add_row "macos" "$RELEASE_TRIGGER_NAME"
-            elif [[ "$HAS_LABEL_LMS_MACOS" == "true" ]]; then add_row "macos" "build:lms-macos"
             elif [[ "$HAS_LABEL_MACOS" == "true" ]]; then add_row "macos" "build:macos"
             fi
           fi
@@ -1028,138 +1002,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/bin
-          cp target/release/roon-ai.exe dist/bin/unified-hifi-win64.exe
+          cp target/release/roon-ai.exe dist/bin/roon-ai-win64.exe
 
       - name: Upload binary
         uses: actions/upload-artifact@v6
         with:
           name: binary-windows
           path: dist/bin/
-          retention-days: 5
-
-  # Universal ZIP: all platform binaries bundled
-  # Uses LMS platform folder structure so findBin() works automatically
-  # Note: Web assets are embedded in the binary (ADR 002), no separate assets needed
-  build-lms-universal:
-    name: Build LMS Plugin (universal)
-    needs: [plan, build-linux-x64, build-linux-arm, build-macos-universal, build-windows]
-    if: |
-      always() &&
-      needs.plan.outputs.build_lms == 'true' &&
-      needs.build-linux-x64.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      # Download all available binaries
-      - name: Download Linux x64 binary
-        uses: actions/download-artifact@v7
-        with:
-          name: binary-x86_64-unknown-linux-musl
-          path: binaries/
-
-      - name: Download Linux ARM64 binary
-        uses: actions/download-artifact@v7
-        if: needs.build-linux-arm.result == 'success'
-        continue-on-error: true
-        with:
-          name: binary-aarch64-unknown-linux-musl
-          path: binaries/
-
-      - name: Download Linux ARMv7 binary
-        uses: actions/download-artifact@v7
-        if: needs.build-linux-arm.result == 'success'
-        continue-on-error: true
-        with:
-          name: binary-armv7-unknown-linux-musleabihf
-          path: binaries/
-
-      - name: Download macOS binary
-        uses: actions/download-artifact@v7
-        if: needs.build-macos-universal.result == 'success'
-        continue-on-error: true
-        with:
-          name: binary-macos-universal
-          path: binaries/
-
-      - name: Download Windows binary
-        uses: actions/download-artifact@v7
-        if: needs.build-windows.result == 'success'
-        continue-on-error: true
-        with:
-          name: binary-windows
-          path: binaries/
-
-      - name: Update install.xml version
-        run: |
-          sed -i "s|<version>[^<]*</version>|<version>${{ needs.plan.outputs.version }}</version>|" lms-plugin/install.xml
-
-      - name: Bundle LMS plugin with all binaries
-        run: |
-          mkdir -p dist
-          cd lms-plugin
-
-          # Create platform-specific Bin directories (LMS findBin convention)
-          # See: https://github.com/LMS-Community/slimserver/tree/public/9.1/Bin
-          mkdir -p Bin/x86_64-linux
-          mkdir -p Bin/aarch64-linux
-          mkdir -p Bin/arm-linux
-          mkdir -p Bin/darwin
-          mkdir -p Bin/MSWin32-x64-multi-thread
-
-          # Copy binaries to their platform folders
-          # All use same name so LMS findBin('roon-ai') works
-          if [ -f ../binaries/roon-ai-linux-x64 ]; then
-            cp ../binaries/roon-ai-linux-x64 Bin/x86_64-linux/roon-ai
-            chmod +x Bin/x86_64-linux/roon-ai
-          fi
-
-          if [ -f ../binaries/roon-ai-linux-arm64 ]; then
-            cp ../binaries/roon-ai-linux-arm64 Bin/aarch64-linux/roon-ai
-            chmod +x Bin/aarch64-linux/roon-ai
-          fi
-
-          if [ -f ../binaries/roon-ai-linux-armv7 ]; then
-            cp ../binaries/roon-ai-linux-armv7 Bin/arm-linux/roon-ai
-            chmod +x Bin/arm-linux/roon-ai
-          fi
-
-          if [ -f ../binaries/roon-ai-macos-universal ]; then
-            cp ../binaries/roon-ai-macos-universal Bin/darwin/roon-ai
-            chmod +x Bin/darwin/roon-ai
-          fi
-
-          if [ -f ../binaries/unified-hifi-win64.exe ]; then
-            cp ../binaries/unified-hifi-win64.exe Bin/MSWin32-x64-multi-thread/roon-ai.exe
-          fi
-
-          # Note: Web assets are embedded in the binary (ADR 002)
-          # No separate public/ folder needed
-
-          # Show what we bundled
-          echo "Bundled binaries:"
-          find Bin -type f -name "roon-ai*" | head -20
-
-          # Create ZIP with everything
-          zip -r ../dist/lms-roon-ai-${{ needs.plan.outputs.version }}.zip . \
-            -x "*.git*"
-
-      - name: Repack with correct directory structure
-        run: |
-          cd dist
-          mkdir -p repack
-          unzip lms-roon-ai-${{ needs.plan.outputs.version }}.zip -d repack/UnifiedHiFi
-          rm lms-roon-ai-${{ needs.plan.outputs.version }}.zip
-          cd repack
-          zip -r ../lms-roon-ai-${{ needs.plan.outputs.version }}.zip UnifiedHiFi
-          cd ..
-          rm -rf repack
-
-      - name: Upload LMS plugin
-        uses: actions/upload-artifact@v6
-        with:
-          name: lms-plugin
-          path: dist/lms-roon-ai-*.zip
           retention-days: 5
 
   # =============================================================================
@@ -1614,7 +1463,7 @@ jobs:
   # Note: Web assets are embedded in the binary (ADR 002)
   upload-release:
     name: Upload to Release
-    needs: [plan, build-linux-x64, build-linux-arm, build-macos-universal, build-windows, build-linux-packages, build-lms-universal, build-synology, build-qnap-x64, build-qnap-arm]
+    needs: [plan, build-linux-x64, build-linux-arm, build-macos-universal, build-windows, build-linux-packages, build-synology, build-qnap-x64, build-qnap-arm]
     if: needs.plan.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -1631,12 +1480,11 @@ jobs:
       - name: Flatten binaries
         run: |
           mkdir -p release
-          find artifacts -name "unified-hifi-*" -type f \
+          find artifacts -name "roon-ai-*" -type f \
             ! -name "*.js" ! -name "*.wasm" \
             -exec cp {} release/ \;
           find artifacts -name "*.deb" -type f -exec cp {} release/ \;
           find artifacts -name "*.rpm" -type f -exec cp {} release/ \;
-          find artifacts -name "*.zip" -type f -exec cp {} release/ \;
           find artifacts -name "*.spk" -type f -exec cp {} release/ \;
           find artifacts -name "*.qpkg" -type f -exec cp {} release/ \;
           ls -la release/
@@ -1655,7 +1503,7 @@ jobs:
           | Linux ARM64 | `roon-ai-linux-arm64` |
           | Linux ARMv7 | `roon-ai-linux-armv7` |
           | macOS (Universal) | `roon-ai-macos-universal` |
-          | Windows x64 | `unified-hifi-win64.exe` |
+          | Windows x64 | `roon-ai-win64.exe` |
 
           ### Linux Packages
           - `.deb` packages for Debian/Ubuntu
@@ -1664,9 +1512,6 @@ jobs:
           ### NAS Packages
           - `.spk` for Synology DSM 7+
           - `.qpkg` for QNAP
-
-          ### LMS Plugin
-          - `lms-roon-ai-*.zip` - Install via LMS Settings > Plugins
           EOF
 
       - name: Upload to release
@@ -1675,92 +1520,6 @@ jobs:
           files: release/*
           append_body: true
           body_path: release-assets.md
-
-  update-repo-xml:
-    name: Update LMS repo.xml
-    needs: [plan, upload-release]
-    if: needs.plan.outputs.is_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: v3
-
-      - name: Get release version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Download LMS zip and compute SHA
-        id: sha
-        run: |
-          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/lms-roon-ai-${{ steps.version.outputs.version }}.zip"
-          echo "Downloading $ZIP_URL"
-          curl -fSL --retry 3 --retry-delay 5 "$ZIP_URL" -o lms-plugin.zip
-          FILE_SIZE=$(stat -c%s lms-plugin.zip 2>/dev/null || stat -f%z lms-plugin.zip)
-          if [ "$FILE_SIZE" -lt 1024 ]; then
-            echo "Error: Downloaded file too small ($FILE_SIZE bytes), expected > 1KB"
-            exit 1
-          fi
-          SHA=$(sha1sum lms-plugin.zip | cut -d' ' -f1)
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-
-      - name: Update repo.xml
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          SHA="${{ steps.sha.outputs.sha }}"
-          REPO_URL="https://github.com/${{ github.repository }}"
-
-          cat > lms-plugin/repo.xml << 'REPOXML'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <extensions>
-            <plugins>
-              <plugin name="UnifiedHiFi"
-                      version="VERSION_PLACEHOLDER"
-                      minTarget="8.0"
-                      maxTarget="*">
-                <title lang="EN">Roon AI</title>
-                <desc lang="EN">Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer, and hardware knobs. Provides HTTP APIs, MQTT integration, and web UI for controlling your audio system from anywhere.</desc>
-                <url>URL_PLACEHOLDER</url>
-                <sha>SHA_PLACEHOLDER</sha>
-                <creator>RooAI</creator>
-                <link>https://forums.lyrion.org/forum/user-forums/3rd-party-hardware/1804977-roon-knob-includes-lms-support</link>
-              </plugin>
-            </plugins>
-          </extensions>
-          REPOXML
-
-          sed -i 's/^          //' lms-plugin/repo.xml
-          sed -i "s|VERSION_PLACEHOLDER|$VERSION|" lms-plugin/repo.xml
-          sed -i "s|URL_PLACEHOLDER|${REPO_URL}/releases/download/v${VERSION}/lms-roon-ai-${VERSION}.zip|" lms-plugin/repo.xml
-          sed -i "s|SHA_PLACEHOLDER|$SHA|" lms-plugin/repo.xml
-
-      - name: Update install.xml version
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          sed -i "s|<version>[^<]*</version>|<version>$VERSION</version>|" lms-plugin/install.xml
-
-      - name: Create PR for LMS plugin update
-        id: create-pr
-        uses: peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: Update LMS plugin to v${{ steps.version.outputs.version }}"
-          title: "chore: Update LMS plugin to v${{ steps.version.outputs.version }}"
-          body: "Auto-generated PR to update LMS plugin metadata for release v${{ steps.version.outputs.version }}."
-          branch: chore/lms-update-${{ steps.version.outputs.version }}
-          base: v3
-          add-paths: |
-            lms-plugin/repo.xml
-            lms-plugin/install.xml
-
-      - name: Enable auto-merge
-        if: steps.create-pr.outputs.pull-request-number
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} --squash --auto
 
   publish-aur:
     name: Publish to AUR
@@ -1809,7 +1568,6 @@ jobs:
       - build-linux-arm
       - build-macos-universal
       - build-windows
-      - build-lms-universal
       - build-synology
       - build-qnap-x64
       - build-qnap-arm
@@ -1832,7 +1590,7 @@ jobs:
           echo "### Binaries" >> $GITHUB_STEP_SUMMARY
           echo "| Binary | Size |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|------|" >> $GITHUB_STEP_SUMMARY
-          find artifacts -name 'unified-hifi-*' -type f 2>/dev/null | while read f; do
+          find artifacts -name 'roon-ai-*' -type f 2>/dev/null | while read f; do
             size=$(du -h "$f" | cut -f1)
             name=$(basename "$f")
             echo "| $name | $size |" >> $GITHUB_STEP_SUMMARY
@@ -1841,13 +1599,13 @@ jobs:
           echo "### Packages" >> $GITHUB_STEP_SUMMARY
           echo "| Package | Size |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|------|" >> $GITHUB_STEP_SUMMARY
-          find artifacts -name '*.qpkg' -o -name '*.spk' -o -name '*.zip' -o -name '*.deb' -o -name '*.rpm' 2>/dev/null | while read f; do
+          find artifacts -name '*.qpkg' -o -name '*.spk' -o -name '*.deb' -o -name '*.rpm' 2>/dev/null | while read f; do
             size=$(du -h "$f" | cut -f1)
             name=$(basename "$f")
             echo "| $name | $size |" >> $GITHUB_STEP_SUMMARY
           done || echo "| (none) | - |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Add \`build:*\` labels to trigger specific builds, or \`build-me\` for defaults. Labels: build:lms, build:synology, build:qnap-arm, build:linux-arm, build:macos, build:windows, build:docker, build:all_" >> $GITHUB_STEP_SUMMARY
+          echo "_Add \`build:*\` labels to trigger specific builds, or \`build-me\` for defaults. Labels: build:synology, build:qnap-arm, build:linux-arm, build:macos, build:windows, build:docker, build:all_" >> $GITHUB_STEP_SUMMARY
 
   # =============================================================================
   # PR Comment with Artifact Links

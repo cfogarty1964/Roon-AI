@@ -1,9 +1,9 @@
 {
   "name": "roon-ai",
   "version": "3.0.0",
-  "description": "Source-agnostic hi-fi control bridge for Roon, LMS, UPnP, and more",
+  "description": "Conversational AI control bridge for Roon",
   "synology": {
-    "maintainer": "Open Horizon Labs",
+    "maintainer": "RooAI",
     "maintainer_url": "https://github.com/cfogarty1964/Roon-AI",
     "displayName": "Roon AI",
     "os_min_ver": "7.0-40000",

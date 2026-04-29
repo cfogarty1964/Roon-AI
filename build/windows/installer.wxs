@@ -4,7 +4,7 @@
 
   <?define ProductName = "Roon AI" ?>
   <?define ProductVersion = "$(var.Version)" ?>
-  <?define ProductManufacturer = "Cloud Atlas" ?>
+  <?define ProductManufacturer = "RooAI" ?>
   <?define UpgradeCode = "F8E7D6C5-B4A3-4281-9060-504030201000" ?>
 
   <Product Id="*"
@@ -45,7 +45,7 @@
     <!-- Main component: the executable -->
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="MainExecutable" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
-        <File Id="UnifiedHiFiControlExe"
+        <File Id="RoonAiExe"
               Source="$(var.BinaryPath)"
               Name="roon-ai.exe"
               KeyPath="yes" />
@@ -53,9 +53,9 @@
         <!-- Windows Service -->
         <ServiceInstall Id="ServiceInstaller"
                         Type="ownProcess"
-                        Name="UnifiedHiFiControl"
+                        Name="RoonAI"
                         DisplayName="Roon AI"
-                        Description="Source-agnostic hi-fi control bridge for Roon, LMS, HQPlayer"
+                        Description="Conversational AI control bridge for Roon"
                         Start="auto"
                         Account="NT AUTHORITY\NetworkService"
                         ErrorControl="normal"
@@ -67,7 +67,7 @@
         </ServiceInstall>
 
         <ServiceControl Id="ServiceControl"
-                        Name="UnifiedHiFiControl"
+                        Name="RoonAI"
                         Start="install"
                         Stop="both"
                         Remove="uninstall"
@@ -75,7 +75,7 @@
 
         <!-- Environment variable for config directory -->
         <Environment Id="ConfigDir"
-                     Name="UNIFIED_HIFI_CONFIG_DIR"
+                     Name="ROON_AI_CONFIG_DIR"
                      Value="[INSTALLFOLDER]data"
                      Permanent="no"
                      Part="all"
@@ -106,7 +106,7 @@
 
         <RemoveFolder Id="CleanupShortcuts" On="uninstall" />
         <RegistryValue Root="HKLM"
-                       Key="Software\CloudAtlas\UnifiedHiFiControl"
+                       Key="Software\RooAI\RoonAI"
                        Name="installed"
                        Type="integer"
                        Value="1"

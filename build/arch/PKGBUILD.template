@@ -1,8 +1,8 @@
-# Maintainer: Cloud Atlas AI <support@cloudatlas.ai>
+# Maintainer: RooAI
 pkgname=roon-ai
 pkgver=${VERSION}
 pkgrel=1
-pkgdesc="Source-agnostic hi-fi control bridge for Roon, LMS, and hardware knobs"
+pkgdesc="Conversational AI control bridge for Roon"
 arch=('x86_64' 'aarch64')
 url="https://github.com/cfogarty1964/Roon-AI"
 license=('custom:PolyForm-Noncommercial-1.0.0')
