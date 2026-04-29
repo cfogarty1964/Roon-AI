@@ -3127,3 +3127,108 @@ Commit `7cff614` ("feat: v3.6.0 — OpenAI TTS, per-token streaming, history-awa
 If a session opens with energy and Picovoice has approved by then, **vendoring the wake-word assets** is the natural one-hour win — flips the dormant Phase 2 scaffolding into a working hands-free interface.
 
 Otherwise, **#3 media keys** (Windows SMTC) is the highest-impact remaining item: lets you control the active zone from any application's foreground without alt-tabbing back to Roon AI.
+
+---
+
+## Recent Work (2026-04-29) — v3.7.0: Quick-wins sweep
+
+Four small polish items shipped in one pass — the entire "≤1h" tier of the post-v3.6.0 candidate list, plus a UX swap on the album-art click.
+
+### Album-art click → modal popup (was: new tab)
+
+The 40×40 banner thumbnail now opens a full-size lightbox **on the same page** instead of a new browser tab. Implemented via the native `<dialog>` element + `showModal()` so the popup renders in the browser's top layer and bypasses any transform/filter ancestor that would otherwise turn `position: fixed` into `position: absolute` (the bug we hit on the 2026-04-28 modal attempt that drove the original switch to `target="_blank"` — see HANDOFF v3.4.0 entry).
+
+Click anywhere (image / backdrop / press ESC) to dismiss. State sync between the Rust signal and the dialog's open/close uses two effects:
+1. Forward sync: when `art_modal_url` flips Some/None, eval `showModal()` / `close()` on the element by id.
+2. Backward sync: a long-running eval installs a `close` event listener on the dialog and forwards close events back to Rust so ESC clears the signal too (otherwise re-clicking the same thumbnail after ESC would be a no-op due to signal-equality).
+
+### Per-message 🔊 replay button
+
+Each finalised assistant bubble now has a subtle "🔊 Replay" button below it. Clicking it re-speaks the reply via `RoonSpeech.speak(markdown, voiceName)`. Routes through the same session machinery as streaming TTS — any in-flight playback gets cancelled before the replay starts, so rapid clicks don't stack.
+
+Only renders for finalised (non-streaming) Assistant turns with non-empty markdown. User and Error turns don't get one.
+
+### Auto-title via Claude Haiku
+
+Conversation titles are now two-phase:
+
+1. **Phase 1 (instant, offline)**: as soon as the first user message lands, derive a substring title from it and persist. This is the existing behaviour, kept as the immediate-feedback step.
+2. **Phase 2 (Haiku)**: after the first assistant reply finishes streaming, fire `POST /api/ai/title` with `{user_message, assistant_reply}`. Claude Haiku 4.5 returns a 2-4 word Title-Case title (e.g. *"Late Night Jazz Piano"*, *"Mahler Symphony Five"*). Replaces the substring placeholder.
+
+Each phase only fires while the title is its respective placeholder, so a user-edited or Haiku-finalised title never gets overwritten. The replacement is idempotent: if the user edits the title between phases, Haiku's result is silently dropped.
+
+Cost: ~$0.0001 per conversation (Haiku is ~$0.80/1M input + $4/1M output, and these are tiny prompts). Imperceptible.
+
+### ✨ Similar — banner button suggesting similar tracks
+
+A new ✨ button on the now-playing banner (next to 📻 Start Radio) asks Claude Haiku for 3–5 tracks/albums similar in mood, genre, and era to whatever's playing. Suggestions render as ▶ Play rows in a sub-row below the volume slider, styled to match the existing assistant-bubble suggestion rows.
+
+Each row's ▶ Play button submits `Play "Title" by Artist` as a chat turn, going through the same agent loop / tool log / suggestion flow as assistant-recommended plays.
+
+Stale-on-track-change: when the current track title changes, the suggestion list auto-clears (recommendations seeded off a track that's no longer playing aren't useful).
+
+The button greys when:
+- No track is playing (no seed)
+- A request is in flight (button shows ✨…)
+
+Cost: ~$0.0002 per click. Negligible.
+
+### Server endpoints added
+
+| Route | Purpose |
+|---|---|
+| `POST /api/ai/title` | Body `{user_message, assistant_reply}` → `{title}`. Haiku 4.5. |
+| `POST /api/ai/similar` | Body `{title, artist?, album?}` → `{suggestions: Vec<Suggestion>}`. Haiku 4.5. |
+
+Both 503 if no Anthropic key configured. Both reuse the existing `anthropic_api_key` (already on `AppState`). Suggestions parser tolerates Haiku slipping ` ```json ` fences in its reply.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Version bump 3.6.0 → 3.7.0 |
+| `src/ai/mod.rs` | New `TitleRequest`/`TitleResponse`/`generate_title()` (Haiku 4.5); new `SimilarRequest`/`SimilarResponse`/`generate_similar()` (Haiku 4.5) |
+| `src/api/mod.rs` | New `ai_title_handler` + `ai_similar_handler` |
+| `src/main.rs` | Registered `POST /api/ai/title` + `POST /api/ai/similar` |
+| `src/app/api.rs` | Mirrored client types + `ai_title()` / `ai_similar()` fetch helpers |
+| `src/app/pages/conversational_ai.rs` | Album modal (`<dialog>` + use_effect sync); per-message 🔊 Replay button; ✨ Similar button + suggestion sub-row + auto-clear on track change; auto-title rewritten as two-phase substring → Haiku |
+| `tests/fixtures/api_routes.txt` | Added `POST /api/ai/title` + `POST /api/ai/similar` |
+
+### Verification
+
+- `cargo check` — clean both targets
+- `cargo test --features server` — 117 passed (no_await_in_lock_violations originally caught a snapshot-held-across-spawn-await in the auto-title effect; fixed by scoping the `messages.read()` into an inner block before the spawn)
+- Tailwind 220 ms; dx 172 s; cargo release 1m 46s (after one transient `STATUS_STACK_BUFFER_OVERRUN` linker glitch on first attempt — a known intermittent issue with `-C lto -C codegen-units=1` on Windows; second attempt succeeded immediately)
+- Live binary smoke-tested:
+  - `GET /status` returned `version=3.7.0`
+  - `POST /api/ai/title` returned `{"title":"Late Night Jazz Piano"}` for a sample request
+  - `POST /api/ai/similar` returned 4 classical suggestions when seeded with Mahler's Adagietto
+
+### Behaviour changes for users
+
+- **Album thumbnail click stays in-page** — no more new tab. ESC or click anywhere to close.
+- **Re-listen to any AI reply** — small "🔊 Replay" button under each finalised assistant bubble.
+- **Conversation titles get smarter** within a second of each new chat's first reply ("Late Night Jazz Piano" instead of "Play late-night jazz pi…").
+- **✨ button on the banner** finds similar tracks via a small Haiku call. Click ▶ Play on any row to start it on the selected zone.
+
+### Lint catch (worth remembering)
+
+The `no_await_in_lock_violations` test (in `tests/await_in_lock_lint.rs`) flags `let X = signal.read()` held across any subsequent `.await` — even when the await is inside a `spawn(async move { ... })` and the guard isn't actually captured. The lint is conservative because syn AST analysis can't prove drop semantics. Fix pattern: scope the read into an inner block that returns the cloned values, then proceed to spawn outside the block. The build_history fn in this same file dodges the issue by using a temporary inline (`build_history(&messages.read())`) rather than a `let`-bound guard.
+
+### What's actually next
+
+The post-v3.6.0 quick-win tier is done. Remaining brainstorm:
+
+| # | Item | Effort | Status |
+|---|---|---|---|
+| 1 | Wake word ("Hey Roon AI") | half day | 🟡 Awaiting Picovoice approval |
+| 3 | Media keys (SMTC on Windows) | half day | Not started |
+| 6 | ~~"Similar to this" suggestion row~~ | — | ✅ Done (2026-04-29) |
+| 7 | Time-aware presets (morning/evening/dinner) | ~1h | Not started |
+| 8 | MQTT bridge for Home Assistant | half day | Not started |
+| 9 | ~~Auto-title via Claude~~ | — | ✅ Done (2026-04-29) |
+| 10 | Sidebar UI for conversations | half day | Not started |
+| — | Album-art popup (was: new tab) | — | ✅ Done (2026-04-29) |
+| — | Per-message 🔊 replay button | — | ✅ Done (2026-04-29) |
+
+If voice approval lands: vendor the Porcupine assets (Phase 2 is one settings toggle away from working). Otherwise: **#3 media keys** is the next-largest UX win for daily use, **#7 time-aware presets** is the cheapest remaining feature, and **#10 sidebar** matters more if multiple conversations accumulate (the dropdown UI starts feeling cramped past ~10 chats).

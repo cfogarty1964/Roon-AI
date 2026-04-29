@@ -1153,3 +1153,63 @@ pub async fn tts_handler(
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+// ============================================================================
+// Auto-title handler — Claude Haiku generates a 2-4 word conversation title
+// ============================================================================
+
+pub async fn ai_title_handler(
+    State(state): State<AppState>,
+    Json(req): Json<crate::ai::TitleRequest>,
+) -> impl IntoResponse {
+    let Some(api_key) = state.anthropic_api_key.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Anthropic API key not configured" })),
+        );
+    };
+
+    match crate::ai::generate_title(api_key, &req.user_message, &req.assistant_reply).await {
+        Ok(title) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "title": title })),
+        ),
+        Err(e) => {
+            tracing::warn!("title generation failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        }
+    }
+}
+
+// ============================================================================
+// Similar-to-this handler — Haiku suggests tracks similar to a seed track
+// ============================================================================
+
+pub async fn ai_similar_handler(
+    State(state): State<AppState>,
+    Json(req): Json<crate::ai::SimilarRequest>,
+) -> impl IntoResponse {
+    let Some(api_key) = state.anthropic_api_key.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": "Anthropic API key not configured" })),
+        );
+    };
+
+    match crate::ai::generate_similar(api_key, &req).await {
+        Ok(suggestions) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "suggestions": suggestions })),
+        ),
+        Err(e) => {
+            tracing::warn!("similar generation failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        }
+    }
+}
+

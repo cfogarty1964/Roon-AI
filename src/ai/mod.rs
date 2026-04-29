@@ -86,6 +86,198 @@ pub struct Suggestion {
 }
 
 // ============================================================================
+// Auto-title (Haiku) — generates a 2-4 word conversation title from the
+// first user message + assistant reply. Cheap and fast (~$0.0001 per call,
+// <1s round trip). Used by the Conversational AI page to replace the raw
+// substring-truncated placeholder title with something readable.
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct TitleRequest {
+    pub user_message: String,
+    #[serde(default)]
+    pub assistant_reply: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TitleResponse {
+    pub title: String,
+}
+
+const TITLE_MODEL: &str = "claude-haiku-4-5-20251001";
+
+/// Generate a short conversation title via Claude Haiku. Falls back to a
+/// trimmed first-message substring on any error so the caller always gets
+/// a title to display.
+pub async fn generate_title(
+    api_key: &str,
+    user_message: &str,
+    assistant_reply: &str,
+) -> Result<String> {
+    let combined = if assistant_reply.trim().is_empty() {
+        format!("User: {}", user_message.trim())
+    } else {
+        format!(
+            "User: {}\n\nAssistant: {}",
+            user_message.trim(),
+            assistant_reply.trim()
+        )
+    };
+
+    // Cap input — long conversations don't add information for a 2-4 word title.
+    let prompt = if combined.chars().count() > 600 {
+        let cutoff = combined
+            .char_indices()
+            .nth(600)
+            .map(|(i, _)| i)
+            .unwrap_or(combined.len());
+        format!("{}…", &combined[..cutoff])
+    } else {
+        combined
+    };
+
+    let body = json!({
+        "model": TITLE_MODEL,
+        "max_tokens": 30,
+        "system": "Generate a 2-4 word title for this music-related conversation. \
+Reply with ONLY the title text — no quotes, no punctuation, no preamble. \
+Use Title Case. Examples: 'Late Night Jazz', 'Mahler Symphony Five', 'Workout Mix'.",
+        "messages": [
+            { "role": "user", "content": prompt }
+        ],
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to reach Anthropic API for title")?;
+
+    let status = resp.status();
+    let text = resp.text().await.context("Failed to read title response")?;
+    if !status.is_success() {
+        return Err(anyhow!("Anthropic API error {}: {}", status, text));
+    }
+
+    let v: Value = serde_json::from_str(&text)
+        .with_context(|| format!("parse title response: {}", text))?;
+    let title = v
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|b| b.get("text"))
+        .and_then(|t| t.as_str())
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("no title text in response"))?;
+
+    // Defensive cap — should already be ~4 words from prompt, but just in case.
+    let words: Vec<&str> = title.split_whitespace().take(6).collect();
+    Ok(words.join(" "))
+}
+
+// ============================================================================
+// Similar-to-this — Haiku suggests 3-5 tracks similar to a given seed track.
+// Used by the now-playing banner's ✨ Similar button. Cheap (~$0.0002/call,
+// ~1s round trip) and stateless: each call gets a fresh suggestion list.
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct SimilarRequest {
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SimilarResponse {
+    pub suggestions: Vec<Suggestion>,
+}
+
+/// Ask Claude Haiku for 3-5 tracks/albums similar to the given seed. Returns
+/// parsed `Suggestion` values. Empty vec on parse failure (silent — the UI
+/// just shows "no suggestions" rather than an error).
+pub async fn generate_similar(
+    api_key: &str,
+    seed: &SimilarRequest,
+) -> Result<Vec<Suggestion>> {
+    let mut seed_desc = format!("'{}'", seed.title.trim());
+    if let Some(a) = seed.artist.as_deref().filter(|a| !a.trim().is_empty()) {
+        seed_desc.push_str(&format!(" by {}", a.trim()));
+    }
+    if let Some(al) = seed.album.as_deref().filter(|a| !a.trim().is_empty()) {
+        seed_desc.push_str(&format!(" (from '{}')", al.trim()));
+    }
+
+    let prompt = format!(
+        "Suggest 3-5 tracks or albums similar in mood, genre, and era to {}. \
+Aim for variety — different artists, complementary styles. \
+Reply with ONLY a JSON array, no preamble, no markdown fences. \
+Each entry: {{\"title\": \"...\", \"artist\": \"...\", \"album\": \"...\"}}. \
+The album field is optional. Example output: \
+[{{\"title\":\"Blue in Green\",\"artist\":\"Miles Davis\",\"album\":\"Kind of Blue\"}}]",
+        seed_desc
+    );
+
+    let body = json!({
+        "model": TITLE_MODEL,  // reuse Haiku — cheap + fast for short structured output
+        "max_tokens": 400,
+        "system": "You are a music curator. When asked for similar music, reply with valid JSON only — no preamble, no markdown, no explanation. The reply must parse as a JSON array of objects with title/artist/album keys.",
+        "messages": [
+            { "role": "user", "content": prompt }
+        ],
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to reach Anthropic API for similar")?;
+
+    let status = resp.status();
+    let text = resp.text().await.context("Failed to read similar response")?;
+    if !status.is_success() {
+        return Err(anyhow!("Anthropic API error {}: {}", status, text));
+    }
+
+    let v: Value = serde_json::from_str(&text)
+        .with_context(|| format!("parse similar response: {}", text))?;
+    let body_text = v
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|b| b.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Strip optional markdown fences just in case the model adds them despite
+    // the system prompt.
+    let cleaned = body_text
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let parsed: Vec<Suggestion> = serde_json::from_str(cleaned).unwrap_or_default();
+    // Cap at 5 so the UI stays compact even if the model goes long.
+    Ok(parsed.into_iter().take(5).collect())
+}
+
+// ============================================================================
 // Anthropic API wire types (minimal — only what we need)
 // ============================================================================
 

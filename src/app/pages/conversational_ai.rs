@@ -1106,6 +1106,64 @@ pub fn ConversationalAi() -> Element {
     // until the user dismisses with the × button on the flash itself.
     let track_action_flash = use_signal(|| Option::<String>::None);
 
+    // Album-art lightbox: when Some(url), render a native <dialog> popup over
+    // the page. We use the browser's <dialog> element with showModal() rather
+    // than a Tailwind position:fixed overlay because <dialog> renders in the
+    // browser top layer and bypasses any transform/filter ancestor that would
+    // otherwise turn position:fixed into position:absolute (the bug we hit on
+    // the prior modal attempt — see HANDOFF 2026-04-28 fourth pass).
+    let mut art_modal_url = use_signal(|| Option::<String>::None);
+
+    // ✨ Similar — populated when the user clicks the banner's Similar button.
+    // Cleared automatically whenever the now-playing track changes (different
+    // title means stale recommendations) so we don't show suggestions seeded
+    // off a track that's no longer playing.
+    let mut similar_suggestions = use_signal(Vec::<Suggestion>::new);
+    let mut similar_loading = use_signal(|| false);
+
+    // Sync the <dialog>'s open state with our signal: showModal() when set to
+    // Some, close() when set to None.
+    use_effect(move || {
+        let open = art_modal_url.read().is_some();
+        let script = if open {
+            "const d = document.getElementById('roon-art-modal'); if (d && !d.open) d.showModal(); return true;"
+        } else {
+            "const d = document.getElementById('roon-art-modal'); if (d && d.open) d.close(); return true;"
+        };
+        spawn(async move {
+            let _ = dioxus::document::eval(script).join::<bool>().await;
+        });
+    });
+
+    // Bridge native dialog 'close' events (fired by ESC) back into the signal
+    // so a re-click of the same thumbnail re-opens. Single long-running eval
+    // installed once on mount; the listener persists until page unload.
+    use_effect(move || {
+        spawn(async move {
+            // Wait briefly for the dialog to be rendered into the DOM, then
+            // install the listener. The empty Promise keeps the eval alive so
+            // dioxus.send() retains a working channel back to Rust.
+            let mut e = dioxus::document::eval(r#"
+                let tries = 0;
+                while (tries++ < 20) {
+                    const d = document.getElementById('roon-art-modal');
+                    if (d) {
+                        d.addEventListener('close', () => { try { dioxus.send(true); } catch (err) {} });
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, 50));
+                }
+                await new Promise(() => {});
+            "#);
+            loop {
+                match e.recv::<bool>().await {
+                    Ok(_) => art_modal_url.set(None),
+                    Err(_) => break,
+                }
+            }
+        });
+    });
+
     // Speech state
     let mut speak_enabled = use_signal(|| false);
     let mut continuous = use_signal(|| false);
@@ -1246,8 +1304,14 @@ pub fn ConversationalAi() -> Element {
         save_messages_to_storage(&id, &snapshot);
     });
 
-    // Auto-title: when a conversation that's still titled "New chat" gets its
-    // first user turn, derive a title from that message and persist it.
+    // Auto-title: two-phase.
+    //   Phase 1: as soon as the first user message arrives, derive a substring
+    //   title from it (instant, offline).
+    //   Phase 2: once the first assistant reply has finished streaming, ask
+    //   Claude Haiku for a 2-4 word title and replace the substring version.
+    // Each phase only fires while the title is still its respective placeholder
+    // ("New chat" → substring title → Haiku title), so we never overwrite a
+    // user-edited (or Haiku-finalised) title.
     use_effect(move || {
         if !*hydrated.read() {
             return;
@@ -1256,23 +1320,82 @@ pub fn ConversationalAi() -> Element {
         if id.is_empty() {
             return;
         }
-        let snapshot = messages.read();
-        let first_user = snapshot.iter().find(|m| matches!(m.role, Role::User));
-        let Some(first) = first_user else { return };
-        let new_title = derive_title(&first.text);
-        let mut idx = conversations.read().clone();
-        let mut changed = false;
-        for entry in idx.iter_mut() {
-            if entry.id == id && entry.title == "New chat" {
-                entry.title = new_title.clone();
-                changed = true;
-                break;
+
+        // Extract everything we need from the messages signal in an inner
+        // scope so the read guard drops before we hit the spawned await
+        // below (the await-in-lock lint catches anything else).
+        let (first_user_text, first_assistant_md) = {
+            let snapshot = messages.read();
+            let first_user = snapshot.iter().find(|m| matches!(m.role, Role::User));
+            let Some(first) = first_user else { return };
+            let first_assistant = snapshot
+                .iter()
+                .find(|m| matches!(m.role, Role::Assistant) && !m.streaming && !m.markdown.is_empty());
+            (
+                first.text.clone(),
+                first_assistant.map(|m| m.markdown.clone()),
+            )
+        };
+
+        let substring_title = derive_title(&first_user_text);
+
+        let current_title = conversations
+            .read()
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.clone())
+            .unwrap_or_default();
+
+        // Phase 1: replace "New chat" with substring title for immediate feedback.
+        if current_title == "New chat" {
+            let mut idx = conversations.read().clone();
+            for entry in idx.iter_mut() {
+                if entry.id == id {
+                    entry.title = substring_title.clone();
+                    break;
+                }
             }
-        }
-        if changed {
             save_index(&idx);
             conversations.set(idx);
+            return;
         }
+
+        // Phase 2: if we still have the substring title AND the first assistant
+        // reply has finished streaming, kick off Haiku for a nicer title.
+        let Some(reply_md) = first_assistant_md else { return };
+        if current_title != substring_title {
+            return; // already replaced (Haiku ran or user edited)
+        }
+
+        let placeholder = substring_title.clone();
+        let conv_id = id.clone();
+        let mut conversations_handle = conversations;
+        spawn(async move {
+            let req = crate::app::api::TitleRequest {
+                user_message: first_user_text,
+                assistant_reply: reply_md,
+            };
+            let Ok(resp) = crate::app::api::ai_title(req).await else { return };
+            let new_title = resp.title.trim().to_string();
+            if new_title.is_empty() {
+                return;
+            }
+            // Only replace if the title is STILL the substring placeholder
+            // (in case the user edited it during the API round trip).
+            let mut idx = conversations_handle.read().clone();
+            let mut changed = false;
+            for entry in idx.iter_mut() {
+                if entry.id == conv_id && entry.title == placeholder {
+                    entry.title = new_title.clone();
+                    changed = true;
+                    break;
+                }
+            }
+            if changed {
+                save_index(&idx);
+                conversations_handle.set(idx);
+            }
+        });
     });
 
     let mut zones = use_resource(|| async {
@@ -1379,6 +1502,10 @@ pub fn ConversationalAi() -> Element {
             recent_tracks.set(list);
         }
         prev_track.set(now);
+        // Track changed → seeded "Similar" recommendations are now stale.
+        if !similar_suggestions.peek().is_empty() {
+            similar_suggestions.set(Vec::new());
+        }
     });
 
     // Wake-word detection → trigger STT (same code path as the manual mic
@@ -1678,16 +1805,15 @@ pub fn ConversationalAi() -> Element {
                                             urlencoding::encode(key)
                                         );
                                         rsx! {
-                                            a {
-                                                href: "{full_url}",
-                                                target: "_blank",
-                                                rel: "noopener noreferrer",
-                                                title: "Open full-size in new tab",
-                                                class: "flex-shrink-0",
+                                            button {
+                                                r#type: "button",
+                                                title: "Open full-size",
+                                                class: "flex-shrink-0 cursor-zoom-in",
+                                                onclick: move |_| art_modal_url.set(Some(full_url.clone())),
                                                 img {
                                                     src: "{url}",
                                                     alt: "Album art",
-                                                    class: "w-10 h-10 object-cover rounded-md bg-muted cursor-zoom-in hover:opacity-80 transition-opacity",
+                                                    class: "w-10 h-10 object-cover rounded-md bg-muted hover:opacity-80 transition-opacity",
                                                 }
                                             }
                                         }
@@ -1771,6 +1897,53 @@ pub fn ConversationalAi() -> Element {
                                                 ),
                                                 "📻"
                                             }
+                                            // ✨ Similar — Haiku suggests 3-5 tracks similar to the
+                                            // current one. Suggestions render in a sub-row below the
+                                            // banner; clicking ▶ Play on a row submits a chat turn
+                                            // exactly like the assistant-suggestion rows do.
+                                            {
+                                                let sim_title = t.title.clone().unwrap_or_default();
+                                                let sim_artist = t.artist.clone();
+                                                let sim_album = t.album.clone();
+                                                let sim_disabled = sim_title.is_empty() || *similar_loading.read();
+                                                let is_loading = *similar_loading.read();
+                                                rsx! {
+                                                    button {
+                                                        class: if sim_disabled {
+                                                            "px-2 py-1 rounded-md text-base leading-none text-muted-foreground/40 cursor-not-allowed"
+                                                        } else {
+                                                            "px-2 py-1 rounded-md hover:bg-primary/10 text-base leading-none"
+                                                        },
+                                                        "aria-label": "Suggest similar tracks",
+                                                        title: if is_loading { "Finding similar…" } else { "Suggest tracks similar to this one" },
+                                                        disabled: sim_disabled,
+                                                        onclick: move |_| {
+                                                            let title = sim_title.clone();
+                                                            let artist = sim_artist.clone();
+                                                            let album = sim_album.clone();
+                                                            similar_loading.set(true);
+                                                            spawn(async move {
+                                                                let req = crate::app::api::SimilarRequest { title, artist, album };
+                                                                match crate::app::api::ai_similar(req).await {
+                                                                    Ok(resp) => {
+                                                                        let mapped: Vec<Suggestion> = resp.suggestions.into_iter().map(|s| Suggestion {
+                                                                            title: s.title,
+                                                                            artist: s.artist,
+                                                                            album: s.album,
+                                                                        }).collect();
+                                                                        similar_suggestions.set(mapped);
+                                                                    }
+                                                                    Err(_) => {
+                                                                        similar_suggestions.set(Vec::new());
+                                                                    }
+                                                                }
+                                                                similar_loading.set(false);
+                                                            });
+                                                        },
+                                                        if is_loading { "✨…" } else { "✨" }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1814,6 +1987,53 @@ pub fn ConversationalAi() -> Element {
                                     rsx! {}
                                 }
                             }
+                            // ✨ Similar suggestions sub-row. Each row is a clickable
+                            // ▶ Play button that submits a chat turn (so the AI handles
+                            // the actual playback through its agent loop, the action
+                            // shows in the tool log, and the same recommendation flow
+                            // applies as for assistant-bubble suggestions).
+                            {
+                                let sims = similar_suggestions.read().clone();
+                                if !sims.is_empty() {
+                                    rsx! {
+                                        div { class: "flex flex-col gap-1 px-1 pl-13 pt-1 border-t border-border/50",
+                                            div { class: "flex items-center justify-between",
+                                                span { class: "text-xs text-muted uppercase tracking-wider", "✨ Similar" }
+                                                button {
+                                                    class: "text-muted hover:text-foreground text-xs px-1",
+                                                    title: "Dismiss",
+                                                    onclick: move |_| similar_suggestions.set(Vec::new()),
+                                                    "×"
+                                                }
+                                            }
+                                            for sug in sims.iter() {
+                                                {
+                                                    let sug = sug.clone();
+                                                    let play_msg = play_message_for(&sug);
+                                                    let label = match &sug.artist {
+                                                        Some(a) if !a.is_empty() => format!("{} — {}", sug.title, a),
+                                                        _ => sug.title.clone(),
+                                                    };
+                                                    let is_loading = *loading.read();
+                                                    rsx! {
+                                                        div { class: "flex items-center gap-2 rounded-md bg-background/50 px-2 py-1 text-sm",
+                                                            button {
+                                                                class: "btn-primary px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                disabled: is_loading,
+                                                                onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                "▶ Play"
+                                                            }
+                                                            span { class: "truncate", "{label}" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    rsx! {}
+                                }
+                            }
                         }
                     }
                 }
@@ -1841,6 +2061,7 @@ pub fn ConversationalAi() -> Element {
                                 let text = msg.text.clone();
                                 let suggestions = msg.suggestions.clone();
                                 let is_streaming = msg.streaming;
+                                let markdown = msg.markdown.clone();
                                 match msg.role {
                                     Role::User => rsx! {
                                         div {
@@ -1889,6 +2110,42 @@ pub fn ConversationalAi() -> Element {
                                                 div {
                                                     class: "rounded-2xl rounded-bl-sm bg-muted px-4 py-3 ai-prose",
                                                     dangerous_inner_html: "{text}",
+                                                }
+                                            }
+                                            // Per-message replay button — only on finalised assistant
+                                            // turns with non-empty markdown. Routes through the same
+                                            // RoonSpeech session machinery as streaming TTS, so any
+                                            // existing audio gets cancelled before this re-plays.
+                                            if !is_streaming && !markdown.is_empty() {
+                                                {
+                                                    let md = markdown.clone();
+                                                    let voice = voice_ctx.get();
+                                                    rsx! {
+                                                        div { class: "flex items-center gap-2 ml-2",
+                                                            button {
+                                                                class: "text-muted hover:text-foreground transition-colors text-xs px-2 py-0.5 rounded-md hover:bg-muted/50",
+                                                                title: "Replay this reply aloud",
+                                                                onclick: move |_| {
+                                                                    let md = md.clone();
+                                                                    let voice = voice.clone();
+                                                                    spawn(async move {
+                                                                        let md_json = serde_json::to_string(&md).unwrap_or_else(|_| "\"\"".into());
+                                                                        let voice_json = if voice.is_empty() {
+                                                                            "null".to_string()
+                                                                        } else {
+                                                                            serde_json::to_string(&voice).unwrap_or_else(|_| "null".into())
+                                                                        };
+                                                                        let script = format!(
+                                                                            "if (window.RoonSpeech) await window.RoonSpeech.speak({}, {}); return true;",
+                                                                            md_json, voice_json
+                                                                        );
+                                                                        let _ = dioxus::document::eval(&script).join::<bool>().await;
+                                                                    });
+                                                                },
+                                                                "🔊 Replay"
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                             if !suggestions.is_empty() {
@@ -2010,6 +2267,27 @@ pub fn ConversationalAi() -> Element {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Album-art lightbox. Native <dialog> renders in the browser's
+            // top layer; showModal/close are driven by the use_effect that
+            // watches art_modal_url. Click anywhere (image, backdrop, ✕) or
+            // press ESC to dismiss.
+            // ESC closes the dialog natively but doesn't clear `art_modal_url`,
+            // so a re-click of the same thumbnail might be a no-op (signal value
+            // unchanged). Mitigated by also wiring a vanilla DOM 'close' event
+            // listener via the use_effect above — see the showModal() script.
+            dialog {
+                id: "roon-art-modal",
+                class: "p-0 bg-transparent border-none rounded-lg max-w-[95vw] max-h-[95vh] backdrop:bg-black/80 backdrop:backdrop-blur-sm",
+                onclick: move |_| art_modal_url.set(None),
+                if let Some(u) = (art_modal_url)() {
+                    img {
+                        src: "{u}",
+                        alt: "Album art (full size)",
+                        class: "block max-w-[95vw] max-h-[95vh] object-contain rounded-lg shadow-2xl cursor-zoom-out",
                     }
                 }
             }

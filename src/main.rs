@@ -205,6 +205,10 @@ mod server {
             // AI chat
             .route("/api/ai/chat", post(api::ai_chat_handler))
             .route("/api/ai/chat/stream", post(api::ai_chat_stream_handler))
+            // Auto-title (Haiku)
+            .route("/api/ai/title", post(api::ai_title_handler))
+            // Similar-to-this (Haiku)
+            .route("/api/ai/similar", post(api::ai_similar_handler))
             // Cloud TTS (OpenAI proxy)
             .route("/api/tts", post(api::tts_handler))
             // Event stream (SSE)

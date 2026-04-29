@@ -32,6 +32,8 @@ GET /upnp/zones
 GET /zones
 POST /api/ai/chat
 POST /api/ai/chat/stream
+POST /api/ai/similar
+POST /api/ai/title
 POST /api/settings
 POST /api/tts
 POST /mcp

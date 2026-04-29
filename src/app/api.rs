@@ -359,3 +359,43 @@ pub struct Suggestion {
 pub async fn ai_chat(req: AiChatRequest) -> Result<AiChatResponse, String> {
     post_json("/api/ai/chat", &req).await
 }
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TitleRequest {
+    pub user_message: String,
+    #[serde(default)]
+    pub assistant_reply: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TitleResponse {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub async fn ai_title(req: TitleRequest) -> Result<TitleResponse, String> {
+    post_json("/api/ai/title", &req).await
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SimilarRequest {
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SimilarResponse {
+    #[serde(default)]
+    pub suggestions: Vec<Suggestion>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+pub async fn ai_similar(req: SimilarRequest) -> Result<SimilarResponse, String> {
+    post_json("/api/ai/similar", &req).await
+}
