@@ -7,6 +7,26 @@
 // Debug builds keep the console for development.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+/// Tuple of Arc handles the Windows SMTC bridge needs from the server.
+/// The server thread builds these as part of `AppState` construction; we
+/// ferry them across to the main thread (via a sync mpsc channel) so
+/// `run_tray()` can hand them to `smtc::spawn_smtc()` along with the HWND
+/// of the hidden tao window it creates. SMTC then drives playback on the
+/// active zone in response to media-key presses, and tracks now-playing
+/// metadata for the Windows volume-overlay tile.
+#[cfg(all(feature = "server", target_os = "windows"))]
+type SmtcHandles = (
+    roon_ai::bus::SharedBus,
+    std::sync::Arc<roon_ai::aggregator::ZoneAggregator>,
+    std::sync::Arc<roon_ai::adapters::roon::RoonAdapter>,
+    std::sync::Arc<roon_ai::adapters::upnp::UPnPAdapter>,
+    // Server thread's tokio runtime handle. SMTC needs it because its
+    // background tasks (bus subscriber, event dispatcher) call
+    // `handle.spawn(...)` — they don't have their own runtime, and the
+    // main thread (where SMTC is initialised) doesn't run tokio.
+    tokio::runtime::Handle,
+);
+
 // Server-only: full server implementation
 #[cfg(feature = "server")]
 mod server {
@@ -49,6 +69,9 @@ mod server {
         external_shutdown: oneshot::Receiver<()>,
         tls_cert_path: std::path::PathBuf,
         tls_key_path: std::path::PathBuf,
+        #[cfg(target_os = "windows")] mut smtc_handles_tx: Option<
+            std::sync::mpsc::Sender<crate::SmtcHandles>,
+        >,
     ) -> Result<()> {
         tracing::info!(
             "Starting Roon AI v{} ({})",
@@ -166,6 +189,30 @@ mod server {
         )
         .with_anthropic_key(anthropic_key)
         .with_openai_key(openai_key);
+
+        // Windows-only: ferry the Arc handles SMTC needs over to the main
+        // thread. The SMTC engine has to be spawned with a real Windows
+        // HWND; we get one from a hidden tao window created inside
+        // `run_tray()` (Windows GUI windows have to live on the same
+        // thread as the message pump that owns them, which is the main
+        // thread). If the receiver is gone (no tray, recv_timeout fired,
+        // shutdown in flight) the bridge silently stays disabled — log
+        // for diagnostics but no error: the rest of the app keeps working.
+        #[cfg(target_os = "windows")]
+        if let Some(tx) = smtc_handles_tx.take() {
+            if tx
+                .send((
+                    state.bus.clone(),
+                    state.aggregator.clone(),
+                    state.roon.clone(),
+                    state.upnp.clone(),
+                    tokio::runtime::Handle::current(),
+                ))
+                .is_err()
+            {
+                tracing::debug!("SMTC handles receiver gone; media-key bridge disabled");
+            }
+        }
 
         // Clone state for shutdown diagnostics
         let state_for_shutdown = state.clone();
@@ -493,15 +540,46 @@ fn ensure_tls_certs() -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)
 // ===========================================================================
 
 #[cfg(all(windows, feature = "server"))]
-fn run_tray(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> anyhow::Result<()> {
+fn run_tray(
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    smtc_rx: std::sync::mpsc::Receiver<SmtcHandles>,
+) -> anyhow::Result<()> {
     use std::time::{Duration, Instant};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
+    use tao::platform::windows::WindowExtWindows;
+    use tao::window::WindowBuilder;
     use tray_icon::{
         menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
         TrayIconBuilder,
     };
 
     let event_loop = EventLoopBuilder::new().build();
+
+    // Hidden window — exists solely to give SMTC (souvlaki) a Windows HWND
+    // it can hook its WndProc onto. Never shown; the tao event loop pumps
+    // its messages, which is what lets SMTC button presses dispatch.
+    // Bound to a let so it isn't dropped (drop = window destroyed = HWND
+    // invalid = SMTC dies silently).
+    let smtc_window = WindowBuilder::new()
+        .with_title("Roon AI SMTC")
+        .with_visible(false)
+        .with_decorations(false)
+        .with_inner_size(tao::dpi::LogicalSize::new(1.0, 1.0))
+        .build(&event_loop)?;
+    let smtc_hwnd = smtc_window.hwnd() as isize;
+
+    // Receive the Arc handles from the server thread (sent right after
+    // AppState is built). 10s timeout is plenty — the server gets to that
+    // point in <1s in practice. If this times out, SMTC stays disabled
+    // but the tray + server keep running.
+    match smtc_rx.recv_timeout(Duration::from_secs(10)) {
+        Ok((bus, aggregator, roon, upnp, runtime_handle)) => {
+            roon_ai::smtc::spawn_smtc(bus, aggregator, roon, upnp, smtc_hwnd, runtime_handle);
+        }
+        Err(e) => {
+            tracing::warn!("SMTC handles not received from server thread: {} — media keys disabled", e);
+        }
+    }
 
     // Build menu
     let menu = Menu::new();
@@ -644,6 +722,16 @@ fn main() -> anyhow::Result<()> {
     // Channel: tray "Quit" → server graceful shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
+    // Channel (Windows-only): server thread → main thread, ferries the Arc
+    // handles SMTC needs once they're built. The server fires-and-drops one
+    // tuple right after AppState is constructed; main waits on it before
+    // entering the tray event loop.
+    #[cfg(target_os = "windows")]
+    let (smtc_tx, smtc_rx) = std::sync::mpsc::channel::<SmtcHandles>();
+
+    #[cfg(target_os = "windows")]
+    let smtc_tx_for_server = Some(smtc_tx);
+
     // Spawn the tokio runtime + axum server on a worker thread.
     // The main thread is reserved for the tray icon's event loop (Windows GUI
     // event loops require the main thread).
@@ -656,6 +744,14 @@ fn main() -> anyhow::Result<()> {
             // Surface server errors in the log file. With windows_subsystem="windows"
             // there's no console, so unlogged errors are invisible; this also helps
             // catch silent failures in the server thread when running with a tray.
+            #[cfg(target_os = "windows")]
+            let result = runtime.block_on(server::run(
+                shutdown_rx,
+                tls_cert_path,
+                tls_key_path,
+                smtc_tx_for_server,
+            ));
+            #[cfg(not(target_os = "windows"))]
             let result = runtime.block_on(server::run(shutdown_rx, tls_cert_path, tls_key_path));
             if let Err(e) = &result {
                 tracing::error!("server thread exited with error: {:#}", e);
@@ -668,7 +764,7 @@ fn main() -> anyhow::Result<()> {
     // so the server can shut down gracefully.
     #[cfg(windows)]
     {
-        if let Err(e) = run_tray(shutdown_tx) {
+        if let Err(e) = run_tray(shutdown_tx, smtc_rx) {
             tracing::error!("Tray icon failed: {} — running headless", e);
             // Fall through and wait on the server thread anyway.
             match server_thread.join() {

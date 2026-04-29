@@ -204,6 +204,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // Dioxus eval channel: client-side fetch/SSE consumer. Receiver is the JS
     // task; if the page navigates away the channel closes — fine to drop.
     ("conversational_ai.rs", "Dioxus eval channel is fire-and-forget on navigation"),
+    // SMTC bridge: tokio mpsc + std::sync::mpsc + souvlaki callback closures.
+    // Receivers are background threads/tasks owned by the bridge itself; if
+    // any receiver is gone (process shutting down), send failure is the
+    // expected case and there's nothing useful to do about it.
+    ("smtc.rs", "SMTC bridge: receiver-dropped means shutdown — nothing to handle"),
 ];
 
 fn is_allowed(file: &str) -> bool {

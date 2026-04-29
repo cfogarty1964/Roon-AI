@@ -1,6 +1,6 @@
 [package]
 name = "roon-ai"
-version = "3.7.0"  # CI overrides via ROON_AI_VERSION env var from git tag
+version = "3.8.0"  # CI overrides via ROON_AI_VERSION env var from git tag
 edition = "2021"
 authors = ["RooAI"]
 description = "Natural-language Roon control bridge with conversational AI agent and MCP server"
@@ -153,6 +153,10 @@ pulldown-cmark = { version = "0.12", optional = true }
 tray-icon = "0.21"
 tao = "0.34"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# souvlaki wraps Windows SMTC (System Media Transport Controls) so the
+# keyboard's media keys can drive playback in the active zone from any
+# foreground app. Cross-platform but currently feature-gated to Windows.
+souvlaki = "0.8"
 
 # ============ WEB-ONLY DEPENDENCIES ============
 [target.'cfg(target_arch = "wasm32")'.dependencies]

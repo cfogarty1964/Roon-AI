@@ -3341,3 +3341,246 @@ The fixture `tests/fixtures/api_routes.txt` reflects the current contract. Route
 - **If you want a 1-hour win** → **#7 time-aware presets**.
 
 The conversational AI surface is feature-complete for single-user voice control. Everything remaining is either situational (depends on whether you have HA / multiple chats / heavy voice usage) or housekeeping (release-pipeline cleanup).
+
+---
+
+## Plan — Post-v3.7.0 Candidate Playbook (2026-04-29)
+
+A concrete plan for each remaining brainstorm item. Each is self-contained — pick any one, in any order. Items A–H below are fresh; I (track-love) is unchanged from earlier handoff entries.
+
+### A. Wake word activation [~5 min once Picovoice approves]
+
+**Status**: code complete in v3.6.0; dormant pending external prereq.
+
+**Steps when approval arrives**:
+1. Train "Hey Roon AI" in `console.picovoice.ai` → WebAssembly platform → download `.ppn`
+2. From a `@picovoice/porcupine-web` GitHub release page, grab `porcupine_web.iife.js` + `pv_porcupine.wasm`
+3. Drop all three into `public/wake-word/`
+4. Settings → "Hands-free wake word" → paste access key → toggle on
+5. Status pill flips "Access key required" → "Listening for 'Hey Roon AI'"
+
+**Ship**: no version bump.
+
+### B. #3 Media keys (Windows SMTC) [~half day, v3.8.0] — recommended next
+
+**Goal**: Keyboard's Play/Pause/Next physical media keys drive the active zone, regardless of which app is foreground.
+
+**Approach**: `souvlaki = "0.7"` (cross-platform wrapper around Windows SMTC, Linux MPRIS, macOS NowPlaying). Handles the hidden-window creation Windows requires. Feature-gated to Windows for now; cross-platform later.
+
+**Steps**:
+1. Add `souvlaki` to `[target.'cfg(windows)'.dependencies]`
+2. New `src/smtc.rs` (Windows-only): spawns a media-controls task; bridges souvlaki's sync callback into async via `tokio::sync::mpsc`
+3. Active-zone resolution: query `ZoneAggregator` for the most recently updated zone in `playing` state; fallback to first Roon zone
+4. Subscribe to bus events: `NowPlayingChanged` / `ZoneUpdated` → update SMTC metadata (title, artist, album, art URL)
+5. SMTC events (Play/Pause/Next/Prev) → dispatch to active zone via `roon.handle_command()` (or upnp's equivalent)
+6. Wire init into `main.rs` after the tray-icon path
+
+**Files**: `Cargo.toml`, new `src/smtc.rs`, `src/lib.rs`, `src/main.rs`
+
+**Gotchas**: souvlaki's `attach()` callback is sync — bridge via `mpsc::Sender`. Process must be a desktop session (not a Windows service). Hidden-console release mode (`windows_subsystem = "windows"`) is fine.
+
+**Ship**: v3.8.0.
+
+### C. #10 Conversation sidebar [~half day, v3.8.0 or v3.9.0]
+
+**Goal**: ChatGPT-style left sidebar listing past conversations. Persistent on desktop, collapsible on mobile.
+
+**Steps**:
+1. Render the existing `conversations` Signal as a vertical list with the active one highlighted
+2. Hover-actions: rename inline, delete, "Pin" toggle (new field on `ConversationMeta`)
+3. Mobile: hamburger button toggles sidebar visibility
+4. Desktop layout: expand from `grid-cols-1 lg:grid-cols-2` (chat + tool log) → `lg:grid-cols-[16rem_1fr_1fr]` (sidebar + chat + tool log)
+5. Keep the dropdown as a fallback for small screens (or remove entirely if the burger is enough)
+
+**Files**: `src/app/pages/conversational_ai.rs` (significant), maybe new `src/app/components/conversation_sidebar.rs`
+
+**Gotchas**: layout reshuffle — existing CSS grid widths assume 2-column. Audit the responsive breakpoints. Pinned conversations sort to top of list.
+
+**Ship**: v3.8.0 if combined with B; v3.9.0 if separate.
+
+### D. #8 MQTT bridge for Home Assistant [~half day, v3.9.0]
+
+**Goal**: Expose play/pause/zone-status as MQTT topics for HA conditional automations.
+
+**Approach**: `rumqttc = "0.24"` async client. Publish bus events; subscribe to commands. HA-discovery topics for auto-config.
+
+**Steps**:
+1. Add `rumqttc` to server feature
+2. Config: new `[mqtt]` section in `config.toml` (broker host, port, optional auth, topic_prefix, enabled flag)
+3. New `src/mqtt.rs`: spawns a connection task, bridges bus events → publish, subscribes to commands → bus
+4. Topics:
+   - `roon-ai/zones/{slug(zone_id)}/state` — published (play/pause/stopped)
+   - `roon-ai/zones/{slug(zone_id)}/now_playing` — published (JSON title/artist/album)
+   - `roon-ai/zones/{slug(zone_id)}/volume` — published (0–100)
+   - `roon-ai/zones/{slug(zone_id)}/command` — subscribed (play/pause/next/prev/volume)
+5. HA discovery: publish `homeassistant/media_player/{zone}/config` topic (auto-creates HA entities)
+6. Settings page: enable toggle + broker URL + auth fields
+
+**Files**: `Cargo.toml`, new `src/mqtt.rs`, `src/main.rs`, `src/config/mod.rs`, `src/app/pages/settings.rs`
+
+**Gotchas**: zone IDs contain colons (`roon:1234`) — slug them for MQTT topic compatibility. Clean shutdown: send `LWT` (Last Will and Testament) `offline` so HA shows the bridge as unavailable on crash.
+
+**Ship**: v3.9.0.
+
+### E. #7 Time-aware presets [~1h, v3.7.1]
+
+**Goal**: One-tap buttons that map to a play action via the AI agent.
+
+**Steps**:
+1. Above the chat input, render a row of preset pills: 🌅 Morning · 🍽️ Dinner · 💪 Workout · 🌙 Wind Down
+2. Each click submits a templated message via existing `do_send_text`:
+   - 🌅 Morning → `"Play something gentle and uplifting on {selected_zone}"`
+   - 🍽️ Dinner → `"Play warm jazz or bossa nova on {selected_zone}"`
+   - 💪 Workout → `"Play upbeat energetic music on {selected_zone}"`
+   - 🌙 Wind Down → `"Play calm ambient or piano on {selected_zone}"`
+3. Stretch: persist user-customised templates to localStorage; Settings UI to edit
+
+**Files**: `src/app/pages/conversational_ai.rs` (small)
+
+**Gotchas**: button row clutters the input area when empty-state. Show only when chat is empty? Or behind a "Quick" expander?
+
+**Ship**: v3.7.1.
+
+### F. Auto-fetch album tracks for context [~half day, v3.8.0+]
+
+**Goal**: When the AI mentions a specific album, surface its track list with per-track ▶ Play buttons inline.
+
+**Approach**: Sentinel-driven — like `<<<SUGGESTIONS>>>`, add `<<<ALBUM_TRACKS>>>...` for the AI to opt in. Server resolves via Roon `albums` browse hierarchy (now possible thanks to `vendor/rust-roon-api` patch from v3.4.1).
+
+**Steps**:
+1. New sentinel + system-prompt instruction: `<<<ALBUM_TRACKS>>>{"title":"...","artist":"...","album":"..."}<<<END_ALBUM_TRACKS>>>`
+2. Server: parse sentinel; resolve album via Roon browse `albums` hierarchy → get track list
+3. Add `album_tracks: Option<Vec<Track>>` to `AiChatResponse`
+4. UI: render album tracks as an expandable list below the assistant bubble
+5. Each track has a ▶ Play button → submits `Play "{track}" from {album} by {artist}` as a chat turn
+
+**Files**: `src/ai/mod.rs`, `src/api/mod.rs`, `src/app/api.rs`, `src/app/pages/conversational_ai.rs`
+
+**Gotchas**: not every album mention should trigger fetch (AI's reasoning prose may mention past listening). Sentinel-driven dispatch keeps it explicit. Roon browse can be slow for large libraries — add a timeout, fall back to no track list on timeout.
+
+**Ship**: v3.8.0 or v3.9.0.
+
+### G. mkcert local CA [~half day, v3.7.1 or skip]
+
+**Goal**: Eliminate the "Your connection is not private" warning when adding new browsers/devices.
+
+**Steps**:
+1. Add an optional `mkcert -install` to a one-time setup script
+2. `ensure_tls_certs()` in `src/main.rs` checks for mkcert; uses it if available, falls back to self-signed otherwise
+3. CLI flag or config option to opt-in to mkcert
+4. Document the per-device setup in README
+
+**Files**: `src/main.rs`, README
+
+**Gotchas**: per-device — every machine that hits the page needs `mkcert -install` once. Diminishing returns if you only use 1–2 devices.
+
+**Ship**: v3.7.1 or skip indefinitely.
+
+### H. Release-pipeline housekeeping [~2h total, before next signed release]
+
+Only matters before a tagged signed release. Bundle into one CI-cleanup commit.
+
+1. **LMS plugin job removal** (~30 min): drop `build-lms-universal` + `update-lms-repo` jobs and their `release.needs:` references in `.github/workflows/build.yml`
+2. **Artifact rename** (~1h): Synology SPK / QNAP QPKG / Linux deb-rpm install paths use `roon-ai`
+3. **Service-file consistency check** (~30 min): verify `build/{linux,arch}/roon-ai.{service,install}` are present and consistent
+
+**Files**: `.github/workflows/{build,docker}.yml`, possibly `build/{linux,arch,synology,qnap}/*`
+
+**Ship**: v3.8.0 cleanup commit, or whenever the next public release is needed.
+
+### I. Track-love (deferred — needs Roon protocol RE) [~4-8h speculative]
+
+Status unchanged from prior handoff entries: would require `mitmproxy`-style WebSocket capture between Roon's official UI and the Roon Core to discover the service that exposes Love. The vendored `vendor/rust-roon-api` is the natural place to add a new service implementation once the protocol is captured.
+
+**Ship**: standalone v3.8.x, or skip indefinitely.
+
+### Long-deferred polish (no plan needed — single-file changes when usage surfaces friction)
+
+- **Per-message timestamps** — small text under each bubble, ~15 min
+- **Conversation pinning + archive** — adds two boolean fields to `ConversationMeta` + sidebar UI, ~30 min once C is done
+- **Conversation summarization** — only when token budget matters; current usage <10c per long chat
+- **Per-zone preferences** — only matters once you have multi-room use cases
+
+### Suggested sequencing
+
+Two natural arcs:
+
+- **Daily-use polish** (~1.5 days): B (media keys) → E (presets) → C (sidebar). Three meaningful UX upgrades.
+- **HA integration** (~half day): D (MQTT). Standalone if you have HA; skip if not.
+- **Release-readiness** (~2h): G (mkcert) + H (CI cleanup). Only before a public tag.
+
+**My pick**: B (media keys) — single highest-impact item not blocked on external action. Lets you control music from any app's foreground without alt-tabbing back. That's the next one going in.
+
+---
+
+## Recent Work (2026-04-29) — v3.8.0: Windows media keys (SMTC)
+
+Plan B from the playbook above shipped. Press the keyboard's Play/Pause/Next/Previous from any foreground app and the active Roon zone responds — no alt-tab to Roon AI required.
+
+### What landed
+
+**SMTC bridge** wraps `souvlaki = "0.8"` (cross-platform — Windows SMTC, Linux MPRIS, macOS NowPlaying), feature-gated to Windows for now. Lifecycle:
+
+1. **Hidden tao window in `run_tray()`**: invisible, no decorations, 1×1 px. Sole purpose is to give souvlaki a real `HWND` it can hook its WndProc onto. Tao's main-thread event loop pumps the window's messages; SMTC button presses bubble up via souvlaki's hook.
+2. **Server thread → main thread channel**: a sync mpsc carries Arc handles (bus, aggregator, roon, upnp) plus the tokio runtime handle from the server thread (where they're built) to the main thread (where the HWND lives) right after `AppState` construction.
+3. **`smtc::spawn_smtc()`** called from `run_tray()` after the recv. Spawns a dedicated `roon-ai-smtc` thread that owns the `MediaControls` instance, plus two tokio tasks (on the server's runtime) for the bus subscriber and event dispatcher.
+4. **Active-zone resolution** at each command: most-recently-updated zone in `playing` state → most-recently-updated overall → first Roon zone alphabetically. Updated from bus events (`NowPlayingChanged`, `ZoneUpdated`) and a 2 s periodic tick so transitions between zones don't lag.
+5. **Metadata pushed to Windows** whenever the active zone changes: title, artist, album, cover URL (`https://localhost:8088/roon/image?image_key=...&width=400&height=400`). Windows fetches the cover on the user's machine, so localhost works.
+6. **Events dispatched** via `roon.control()` / `upnp.control()` with the same action strings the banner buttons use: `play`, `pause`, `play_pause` (Toggle), `next`, `previous`, `stop`. Volume/Seek/Quit/Raise/Open events from souvlaki are ignored.
+
+### Architectural detours worth recording
+
+Three things tripped me up in this session — each one a learning for future Windows-GUI integrations:
+
+**Souvlaki on Windows requires an HWND.** The `PlatformConfig.hwnd: Option<*mut c_void>` field looks optional but `expect()`s in souvlaki 0.8.3 line 59. None panics. Fix: source an HWND from a hidden tao window in `run_tray()`. Future cross-platform port (Linux MPRIS, macOS NowPlaying) won't need this — both auto-create their session.
+
+**`tokio::spawn` panics from the main thread.** The first cut called `spawn_smtc` from `run_tray()` (main thread, no tokio runtime), and the bus-subscriber/event-dispatcher tasks panic with `"there is no reactor running"`. Fix: ferry the server's `tokio::runtime::Handle` through the same channel and call `runtime.spawn(...)` instead of bare `tokio::spawn`. The handle is `Send + Sync + Clone`.
+
+**The `*mut c_void` HWND isn't `Send`.** Can't pass through a thread channel directly; cast to `isize` for transit, cast back inside the SMTC thread before passing to `PlatformConfig`. No unsafe needed (creating the pointer is safe; souvlaki's internal use of it is what's `unsafe`).
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `Cargo.toml` | Version bump 3.7.0 → 3.8.0; added `souvlaki = "0.8"` to `[target.'cfg(windows)'.dependencies]` |
+| `src/lib.rs` | Registered `smtc` module (cfg-gated to `feature = "server"` + `target_os = "windows"`) |
+| `src/smtc.rs` | **New** — full SMTC bridge: souvlaki integration, hidden-thread MediaControls owner, tokio-runtime-spawned bus subscriber + event dispatcher, active-zone resolution |
+| `src/main.rs` | New `SmtcHandles` type alias; `server::run` gained an `smtc_handles_tx` parameter; sends Arc handles + runtime handle right after AppState built; `run_tray` accepts the receiver, creates the hidden tao window, recvs handles with 10s timeout, calls `spawn_smtc()` |
+| `tests/ignored_send_lint.rs` | Added `smtc.rs` to allowlist (intentional fire-and-forget on receiver-dropped = shutdown) |
+
+### Verification
+
+- `cargo check --features server` — clean
+- `cargo check --target wasm32-unknown-unknown --features web --no-default-features` — clean (smtc cfg-gated out)
+- `cargo test --features server` — 117 passed (one cycle through the lint with the allowlist update; clean after)
+- Tailwind 223 ms; dx 182 s; cargo release 2:21
+- Live binary: `GET /status` returns `version=3.7.0` (will be `3.8.0` after the version bump in this commit). Log line confirms `SMTC ready — keyboard media keys (Play/Pause/Next/Previous) now drive the active Roon zone` followed by `System tray icon initialised`.
+
+### Behaviour changes for users
+
+- **Press Play/Pause/Next/Previous on the keyboard** while typing in Word, browsing the web, gaming, etc. The active Roon zone responds. No need to alt-tab to Roon AI.
+- **Windows volume-overlay tile shows what's playing** — track title, artist, album art. Updates as the track changes on the active zone.
+- **Active zone** = whichever zone is currently `playing`. If multiple are playing, the most-recently-updated one wins. If nothing is playing, the most-recently-updated zone is the fallback (so a paused zone still receives Play presses).
+
+### Known limitations
+
+- **Volume keys aren't wired**. SMTC exposes volume up/down events; we ignore them currently because volume changes per-output and we'd need to decide whether the user means "system volume" or "active zone volume". Could add later — small change in `handle_smtc_event`.
+- **Single active zone**. If you're playing in two rooms simultaneously and want to pause just one, the keyboard shortcut hits whichever zone won the active-zone tiebreak. Manual control from the page or a per-zone hotkey assignment would solve this; deferred until real friction.
+- **Cross-platform**: Linux MPRIS / macOS NowPlaying support is dormant. `smtc.rs` is cfg-gated to Windows. souvlaki already speaks the other two; relaxing the cfg + light platform-specific testing is a future task if anyone uses Roon AI on those platforms.
+
+### What's actually next
+
+Still on the table from the playbook (in priority order):
+
+| Item | Effort | Status |
+|---|---|---|
+| A — Wake word activation | ~5 min | 🟡 Awaiting Picovoice approval |
+| C — Conversation sidebar | half day | Not started |
+| D — MQTT bridge for HA | half day | Not started |
+| E — Time-aware presets | ~1h | Not started |
+| F — Auto-fetch album tracks | half day | Not started |
+| G — mkcert local CA | half day | Not started |
+| H — Release-pipeline housekeeping | ~2h | Not started |
+| I — Track-love (protocol RE) | 4-8h speculative | Not started |
+
+**My pick**: **E (time-aware presets, ~1h)** if you want a quick polish win, or **C (sidebar, ~half day)** if conversations are starting to accumulate. **D (MQTT)** if you have Home Assistant running and want HA conditional automations.

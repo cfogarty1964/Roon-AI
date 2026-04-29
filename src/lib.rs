@@ -50,3 +50,7 @@ pub mod embedded;
 pub mod ai;
 #[cfg(feature = "server")]
 pub mod mcp;
+// Windows-only: SMTC (System Media Transport Controls) bridge so the
+// keyboard's media keys drive playback on the active Roon zone.
+#[cfg(all(feature = "server", target_os = "windows"))]
+pub mod smtc;
