@@ -34,3 +34,12 @@ dist/
 public/tailwind.css
 # Note: public/dx-components-theme.css is hand-authored, NOT generated
 .worktrees/
+
+# Wake-word browser runtime — vendored by `scripts/setup-wake-word.{ps1,sh}`,
+# ~80 MB of npm-derived binaries (openwakeword IIFE + ONNX models +
+# ort-wasm variants). Reproducible from the setup script; not worth tracking.
+/public/wake-word/
+
+# Claude Code per-developer state
+.claude/scheduled_tasks.lock
+.claude/settings.json

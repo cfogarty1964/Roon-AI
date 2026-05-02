@@ -255,6 +255,12 @@ dx serve --platform web --features web --port 8088
 
 ---
 
+## Credits
+
+Roon AI builds on substantial upstream work — see [CREDITS.md](CREDITS.md) for the full lineage and acknowledgements.
+
+---
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)

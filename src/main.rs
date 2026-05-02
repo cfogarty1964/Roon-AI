@@ -267,6 +267,11 @@ mod server {
             .route("/admin", get(settings_redirect))
             // Embedded WASM/JS assets (ADR 002: serve from memory, no disk extraction)
             .route("/assets/{*path}", get(embedded::serve_embedded_asset))
+            // Wake-word runtime (openWakeWord IIFE bundle + ONNX models +
+            // ort-wasm). Vendored separately by `scripts/setup-wake-word`,
+            // embedded straight from `public/wake-word/` rather than the
+            // dx build output. 404 when missing → JS gracefully no-ops.
+            .route("/wake-word/{*path}", get(embedded::serve_wake_word_asset))
             // Embedded static files (favicon, CSS, images)
             .route(
                 "/favicon.ico",

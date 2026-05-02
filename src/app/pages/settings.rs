@@ -244,39 +244,74 @@ pub fn Settings() -> Element {
                 }
             }
 
-            // Wake-word section — "Hey Roon AI" hands-free trigger
+            // Wake-word section — "Hey Roon" hands-free trigger
             section { class: "mb-8",
                 div { class: "mb-4",
                     h2 { class: "text-xl font-semibold", "Hands-free wake word" }
                     p { class: "text-muted text-sm",
-                        "Say \"Hey Roon AI\" to start a voice request without clicking the mic. "
-                        "Runs entirely in your browser via Picovoice Porcupine — no audio leaves the device until you ask the AI to do something. "
-                        "Setup is one-time but requires three things: a free Picovoice account + access key, a trained \".ppn\" model file, and the Porcupine WebAssembly bundle. "
-                        "See "
+                        "Say \"Hey Roon\" to start a voice request without clicking the mic. "
+                        "Runs entirely in your browser via "
+                        a {
+                            class: "underline",
+                            href: "https://github.com/dscripka/openWakeWord",
+                            target: "_blank",
+                            rel: "noopener",
+                            "openWakeWord"
+                        }
+                        " — no audio leaves the device until you ask the AI to do something. "
+                        "One-time setup: run "
+                        code { class: "text-xs", "scripts/setup-wake-word.ps1" }
+                        " (or "
+                        code { class: "text-xs", ".sh" }
+                        "), then rebuild. See "
                         code { class: "text-xs", "src/app/wake_word_context.rs" }
-                        " for the full setup walkthrough."
+                        " for the full walkthrough including how to train a custom \"Hey Roon\" model in ~1 hour of free Colab time."
                     }
                 }
                 div { class: "card p-6",
                     div { class: "flex flex-col gap-4",
-                        div { class: "flex items-center gap-3",
+                        label { class: "flex items-center gap-3 cursor-pointer select-none",
                             input {
                                 r#type: "checkbox",
                                 class: "checkbox",
                                 aria_label: "Enable wake word",
                                 checked: (wake_ctx.enabled)(),
-                                onchange: move |e| wake_ctx.set_enabled(e.value() == "true" || e.value() == "on"),
+                                // Dioxus 0.7's form-event payload for
+                                // checkboxes is inconsistent across
+                                // browsers — just toggle the Signal based
+                                // on the current state. The Signal binding
+                                // on `checked:` keeps DOM and state in sync.
+                                onchange: move |_| {
+                                    let cur = (wake_ctx.enabled)();
+                                    wake_ctx.set_enabled(!cur);
+                                },
                             }
-                            span { class: "text-sm", "Listen for \"Hey Roon AI\"" }
+                            span { class: "text-sm", "Listen for \"Hey Roon\"" }
                         }
                         div { class: "flex flex-col gap-2",
-                            label { class: "text-sm font-medium", "Picovoice access key" }
-                            input {
-                                r#type: "password",
-                                class: "input text-sm py-2 max-w-md",
-                                placeholder: "Paste from console.picovoice.ai",
-                                value: "{wake_ctx.access_key}",
-                                oninput: move |e| wake_ctx.set_access_key(&e.value()),
+                            {
+                                let raw = (wake_ctx.threshold)();
+                                let parsed = raw.trim().parse::<f32>().ok().filter(|t| (0.0..=1.0).contains(t));
+                                let display = parsed.unwrap_or(0.5);
+                                let display_str = format!("{:.2}", display);
+                                rsx! {
+                                    label { class: "text-sm font-medium",
+                                        "Detection threshold: "
+                                        span { class: "font-mono", "{display_str}" }
+                                    }
+                                    input {
+                                        r#type: "range",
+                                        class: "max-w-md",
+                                        min: "0.1",
+                                        max: "0.95",
+                                        step: "0.05",
+                                        value: "{display}",
+                                        oninput: move |e| wake_ctx.set_threshold(&e.value()),
+                                    }
+                                    p { class: "text-xs text-muted",
+                                        "Higher = stricter (fewer false triggers, more missed wakes). 0.5 is a sensible starting point."
+                                    }
+                                }
                             }
                             p { class: "text-xs text-muted",
                                 "Status: "

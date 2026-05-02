@@ -41,6 +41,18 @@ use tower::{Layer, Service};
 #[allow_missing = true]
 pub struct PublicAssets;
 
+/// Wake-word assets vendored by `scripts/setup-wake-word.{ps1,sh}`. Lives in
+/// `public/wake-word/` directly (not in the dx build output) because dx only
+/// copies declared Dioxus assets, and this directory holds large opaque
+/// blobs (ONNX models, ort-wasm runtime) that aren't part of the WASM
+/// bundle. `allow_missing = true` so the binary still builds when the user
+/// hasn't run the setup script yet — the wake-word toggle just stays
+/// gracefully dormant in that case (the JS does a HEAD probe).
+#[derive(Embed)]
+#[folder = "public/wake-word/"]
+#[allow_missing = true]
+pub struct WakeWordAssets;
+
 /// Check if embedded assets are available.
 /// Returns true if assets were embedded at compile time.
 pub fn has_embedded_assets() -> bool {
@@ -126,6 +138,34 @@ pub async fn serve_static_file(
 /// List all embedded asset paths (for debugging).
 pub fn list_embedded_assets() -> Vec<String> {
     PublicAssets::iter().map(|s| s.to_string()).collect()
+}
+
+/// Axum handler for `/wake-word/*path` — serves the openWakeWord browser
+/// runtime bundled by `scripts/setup-wake-word.{ps1,sh}`. Returns 404 when
+/// the asset isn't present so the JS HEAD probe in `WAKE_WORD_INSTALL_JS`
+/// can detect "setup script never ran" and gracefully no-op.
+pub async fn serve_wake_word_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> Response<Body> {
+    match WakeWordAssets::get(&path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(&path)
+                .first_or_octet_stream()
+                .to_string();
+            // Long cache — these are content-immutable per-build (any
+            // change requires rebuilding + restarting the binary anyway).
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime)
+                .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                .body(Body::from(content.data.into_owned()))
+                .unwrap_or_else(|_| Response::new(Body::empty()))
+        }
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::from("Wake-word asset not found"))
+            .unwrap_or_else(|_| Response::new(Body::from("Wake-word asset not found"))),
+    }
 }
 
 /// Extract bootstrap scripts and links from embedded index.html.

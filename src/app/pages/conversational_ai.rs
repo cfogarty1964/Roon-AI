@@ -1,4 +1,4 @@
-use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, RecentTrack, Suggestion, Zone, ZonesResponse};
+﻿use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, RecentTrack, Suggestion, Zone, ZonesResponse};
 use crate::app::components::Layout;
 use crate::app::default_zone::use_default_zone;
 use crate::app::sse::use_sse;
@@ -23,6 +23,10 @@ const LEGACY_STORAGE_KEY: &str = "roon-ai-conversation";
 struct ConversationMeta {
     id: String,
     title: String,
+    // Older index entries (pre-sidebar) lack this field — `serde(default)`
+    // means they deserialize as `pinned: false` and migrate transparently.
+    #[serde(default)]
+    pinned: bool,
 }
 
 /// Time-aware preset buttons rendered above the chat input. Each preset is
@@ -157,6 +161,13 @@ struct SpeechCtx {
     continuous: Signal<bool>,
     listening: Signal<bool>,
     selected_voice: Signal<String>,
+    /// True while TTS audio is actively playing — set when a chat turn
+    /// starts (with speak enabled), cleared on SpeechComplete. Distinct
+    /// from `loading` because the UI clears `loading` as soon as the
+    /// agent finishes generating tokens, while audio playback continues
+    /// for several seconds. The wake-word listener uses this to pause
+    /// detection during TTS so the AI's own reply doesn't loop-trigger.
+    speaking: Signal<bool>,
 }
 
 fn do_send_text(
@@ -201,6 +212,13 @@ fn do_send_text(
     let in_progress_idx = messages.read().len() - 1;
 
     loading.set(true);
+    // Mark TTS as imminent so the wake-word listener pauses BEFORE audio
+    // starts playing (otherwise the first sentence sneaks past). Cleared
+    // on SpeechComplete (or any error path that breaks the consumer).
+    if *speech.speak_enabled.peek() {
+        let mut speaking = speech.speaking;
+        speaking.set(true);
+    }
 
     let req = AiChatRequest {
         message: msg,
@@ -296,6 +314,13 @@ fn do_send_text(
             }
         }
         loading.set(false);
+        // Clear `speaking` regardless of how we exited the loop — break on
+        // SpeechComplete is the happy path; the others are errors where
+        // TTS playback is also done (or never started).
+        {
+            let mut speaking = speech.speaking;
+            speaking.set(false);
+        }
 
         if done_seen && *speech.continuous.read() {
             start_listening_task(messages, loading, selected_zone, speech, current_track, recent_tracks);
@@ -455,141 +480,12 @@ try {
 }
 "#;
 
-/// JS module that wraps Picovoice Porcupine for browser-side wake-word
-/// detection. Idempotent: re-running this script is safe if the module is
-/// already installed.
-///
-/// **Fully scaffold-grade.** Until the user vendors three files into the
-/// project's `public/wake-word/` directory the engine never initialises and
-/// every method is a graceful no-op:
-///   - `porcupine_web.iife.js` — Picovoice browser SDK (IIFE bundle from a
-///     `@picovoice/porcupine-web` release)
-///   - `pv_porcupine.wasm` — the engine WASM blob
-///   - `Hey-Roon-AI_en.ppn` — the trained wake-word model the user generates
-///     at <https://console.picovoice.ai/> (platform = WebAssembly)
-///
-/// `init(accessKey)` returns `true` only when all three are present, the
-/// access key is valid, and the engine bootstraps successfully. `start()` /
-/// `pause()` / `resume()` / `stop()` then drive the WebVoiceProcessor mic
-/// subscription. Detections fire `RoonWake.onDetection()` if registered.
-const WAKE_WORD_INSTALL_JS: &str = r#"
-if (!window.RoonWake) {
-    window.RoonWake = {
-        ready: false,
-        active: false,
-        worker: null,
-        onDetection: null,
-        async _ensureSdkLoaded() {
-            if (window.PorcupineWeb) return true;
-            // Probe for the IIFE bundle. If 404, the user hasn't vendored.
-            try {
-                const head = await fetch('/wake-word/porcupine_web.iife.js', { method: 'HEAD' });
-                if (!head.ok) return false;
-            } catch (e) { return false; }
-            // Inject script tag if not already injected.
-            if (document.querySelector('script[data-roon-porcupine]')) {
-                // Already injecting; wait briefly for it to settle.
-                for (let i = 0; i < 30 && !window.PorcupineWeb; i++) {
-                    await new Promise(r => setTimeout(r, 100));
-                }
-                return !!window.PorcupineWeb;
-            }
-            return await new Promise((resolve) => {
-                const s = document.createElement('script');
-                s.src = '/wake-word/porcupine_web.iife.js';
-                s.dataset.roonPorcupine = '1';
-                s.onload = () => resolve(!!window.PorcupineWeb);
-                s.onerror = () => resolve(false);
-                document.head.appendChild(s);
-            });
-        },
-        async init(accessKey) {
-            if (this.ready) return true;
-            if (!accessKey) return false;
-            const sdk = await this._ensureSdkLoaded();
-            if (!sdk) return false;
-            try {
-                this.worker = await window.PorcupineWeb.PorcupineWorker.create(
-                    accessKey,
-                    [{ publicPath: '/wake-word/Hey-Roon-AI_en.ppn', label: 'roon-ai' }],
-                    () => { try { if (this.onDetection) this.onDetection(); } catch (e) {} },
-                    { publicPath: '/wake-word/pv_porcupine.wasm' }
-                );
-                this.ready = true;
-                return true;
-            } catch (e) {
-                console.warn('Porcupine init failed:', e);
-                return false;
-            }
-        },
-        async start() {
-            if (!this.ready || this.active) return this.active;
-            try {
-                await window.PorcupineWeb.WebVoiceProcessor.subscribe(this.worker);
-                this.active = true;
-                return true;
-            } catch (e) { return false; }
-        },
-        async pause() {
-            if (!this.active) return;
-            try { await window.PorcupineWeb.WebVoiceProcessor.unsubscribe(this.worker); } catch (e) {}
-            this.active = false;
-        },
-        async resume() {
-            return this.start();
-        },
-        async stop() {
-            if (this.active) {
-                try { await window.PorcupineWeb.WebVoiceProcessor.unsubscribe(this.worker); } catch (e) {}
-                this.active = false;
-            }
-            if (this.worker) {
-                try { await this.worker.terminate(); } catch (e) {}
-                this.worker = null;
-            }
-            this.ready = false;
-            this.onDetection = null;
-        }
-    };
-}
-return true;
-"#;
+// Wake-word runtime (engine wrapper + listener) lives in
+// `crate::app::wake_word_context` so it runs at app root and reacts to the
+// Settings toggle regardless of which page is mounted. The pause/resume
+// effect that responds to mic/AI activity stays on this page since it
+// depends on page-local signals.
 
-/// Long-running eval task: receives `{accessKey}` via `dioxus.recv()`, inits
-/// Porcupine, then sends `{kind: "ready"}` and forwards each subsequent
-/// detection as `{kind: "detected"}`. Sends `{kind: "failed", reason}` if
-/// the engine can't initialise. The task is abandoned (eval dropped) when
-/// the user disables the wake word — at which point a separate one-shot
-/// eval calls `window.RoonWake.stop()` to halt the engine.
-const WAKE_WORD_LISTEN_JS: &str = r#"
-const cfg = await dioxus.recv();
-const ok = await window.RoonWake.init(cfg && cfg.accessKey);
-if (!ok) {
-    dioxus.send({ kind: 'failed', reason: 'init failed (check assets in public/wake-word/ and your access key)' });
-    return;
-}
-window.RoonWake.onDetection = () => { try { dioxus.send({ kind: 'detected' }); } catch (e) {} };
-const started = await window.RoonWake.start();
-if (!started) {
-    dioxus.send({ kind: 'failed', reason: 'failed to acquire microphone' });
-    return;
-}
-dioxus.send({ kind: 'ready' });
-// Keep the eval alive so the detection callback stays valid. When the
-// outer task is dropped (Rust drops the eval), this Promise never resolves
-// — that's fine, the engine is still running on the JS side until
-// window.RoonWake.stop() is called by the disable handler.
-await new Promise(() => {});
-"#;
-
-/// Events from `WAKE_WORD_LISTEN_JS`.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum WakeEvent {
-    Ready,
-    Detected,
-    Failed { reason: String },
-}
 
 /// Start mic capture in a spawned task. On result, auto-submits via do_send_text.
 fn start_listening_task(
@@ -1147,6 +1043,12 @@ pub fn ConversationalAi() -> Element {
     // an empty list before the load has a chance to populate it.
     let mut hydrated = use_signal(|| false);
 
+    // Inline-rename state for the conversation sidebar. `editing_id` is
+    // Some(id) while the user is editing that row's title; `editing_text`
+    // holds the in-progress text. Enter or blur commits, Escape cancels.
+    let mut editing_id = use_signal(|| Option::<String>::None);
+    let mut editing_text = use_signal(|| String::new());
+
     // Transient flash message for one-shot track actions in the now-playing
     // banner (currently used by Start Radio; designed to be reusable for
     // future single-shot actions). Stays visible until the next action or
@@ -1215,84 +1117,37 @@ pub fn ConversationalAi() -> Element {
     let mut speak_enabled = use_signal(|| false);
     let mut continuous = use_signal(|| false);
     let listening = use_signal(|| false);
+    let speaking = use_signal(|| false);
     let mut stt_supported = use_signal(|| true);
     // Voice choice lives in shared context (set on Settings page)
     let voice_ctx = use_voice();
-    let speech = SpeechCtx { speak_enabled, continuous, listening, selected_voice: voice_ctx.selected };
+    let speech = SpeechCtx { speak_enabled, continuous, listening, selected_voice: voice_ctx.selected, speaking };
 
-    // Install JS speech module on mount; report STT support.
+    // Install JS speech module on mount; report STT support. (The wake-word
+    // engine install + listener live in `wake_word_context.rs` so they run
+    // at app root and react to the Settings toggle from any page.)
     use_effect(move || {
         spawn(async move {
             let e = dioxus::document::eval(SPEECH_INSTALL_JS);
             if let Ok(supported) = e.join::<bool>().await {
                 stt_supported.set(supported);
             }
-            // Install wake-word JS module too — idempotent, safe even if
-            // assets aren't present (init will fail gracefully if so).
-            let _ = dioxus::document::eval(WAKE_WORD_INSTALL_JS).join::<bool>().await;
         });
     });
 
-    // Wake-word: shared context (toggle + access key live in Settings page).
+    // Wake-word: shared context (toggle + threshold live in Settings page;
+    // engine + listener run at app root via use_wake_word_provider).
     let wake_ctx = use_wake_word();
 
-    // Spawn / shut down the Porcupine listener when the user toggles wake word
-    // or pastes a new access key. When (enabled && key) flip true together,
-    // run WAKE_WORD_LISTEN_JS and forward detections into wake_ctx.detected_count.
-    // When either flips off, fire a one-shot stop on the JS side. The previous
-    // listener task's eval is left to garbage-collect; window.RoonWake.stop()
-    // cleared the detection callback, so any straggler events are no-ops.
-    use_effect(move || {
-        let enabled = *wake_ctx.enabled.read();
-        let access_key = wake_ctx.access_key.read().clone();
-        let mut status = wake_ctx.status;
-
-        if !enabled {
-            status.set("Off".into());
-            spawn(async {
-                let _ = dioxus::document::eval(
-                    "if (window.RoonWake) await window.RoonWake.stop(); return true;",
-                )
-                .join::<bool>()
-                .await;
-            });
-            return;
-        }
-        if access_key.is_empty() {
-            status.set("Access key required".into());
-            return;
-        }
-
-        status.set("Initialising…".into());
-        let mut detected_count = wake_ctx.detected_count;
-        spawn(async move {
-            let mut eval = dioxus::document::eval(WAKE_WORD_LISTEN_JS);
-            let _ = eval.send(serde_json::json!({ "accessKey": access_key }));
-            loop {
-                match eval.recv::<WakeEvent>().await {
-                    Ok(WakeEvent::Ready) => {
-                        status.set("Listening for 'Hey Roon AI'".into());
-                    }
-                    Ok(WakeEvent::Detected) => {
-                        let next = *detected_count.peek() + 1;
-                        detected_count.set(next);
-                    }
-                    Ok(WakeEvent::Failed { reason }) => {
-                        status.set(format!("Failed: {}", reason));
-                        break;
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    });
-
-    // Pause Porcupine while we're busy (a request is in flight or the mic is
-    // open) so the wake word doesn't false-trigger from the AI's spoken reply
-    // or from the user's STT capture itself. Resume when both go idle.
+    // Pause the wake-word listener while we're busy: a request is in flight
+    // (`loading`), the STT mic is open (`listening`), or TTS is actively
+    // playing the AI's reply (`speaking`). The TTS case is the critical
+    // one — without it, the AI hears its own reply ("…tell Jarvis to…")
+    // and loop-triggers the next turn. Resume only when all three idle.
+    let speaking_signal = speech.speaking;
     use_effect(move || {
         if !*wake_ctx.enabled.read() { return; }
-        let busy = *loading.read() || *listening.read();
+        let busy = *loading.read() || *listening.read() || *speaking_signal.read();
         let cmd = if busy { "pause" } else { "resume" };
         let script = format!(
             "if (window.RoonWake) {{ try {{ await window.RoonWake.{}(); }} catch (e) {{}} }} return true;",
@@ -1314,6 +1169,7 @@ pub fn ConversationalAi() -> Element {
                 idx.push(ConversationMeta {
                     id: legacy_id,
                     title: "Conversation".to_string(),
+                    pinned: false,
                 });
                 save_index(&idx);
             } else {
@@ -1322,6 +1178,7 @@ pub fn ConversationalAi() -> Element {
                 idx.push(ConversationMeta {
                     id,
                     title: "New chat".to_string(),
+                    pinned: false,
                 });
                 save_index(&idx);
             }
@@ -1608,8 +1465,6 @@ pub fn ConversationalAi() -> Element {
         }
     };
 
-    let has_actions = messages.read().iter().any(|m| !m.actions.is_empty());
-
     rsx! {
         Layout {
             title: "Conversational AI",
@@ -1695,12 +1550,14 @@ pub fn ConversationalAi() -> Element {
                         }
                     }
                     // Conversation selector: dropdown of past chats + New + Delete.
+                    // Hidden on lg+ where the sidebar takes over; kept as the
+                    // small-screen fallback (sidebar is desktop-only for now).
                     {
                         let convs = conversations.read().clone();
                         let cur = current_id.read().clone();
                         let single = convs.len() <= 1;
                         rsx! {
-                            div { class: "flex items-center gap-1",
+                            div { class: "flex items-center gap-1 lg:hidden",
                                 if !convs.is_empty() {
                                     select {
                                         class: "input text-sm py-1 max-w-[14rem]",
@@ -1733,6 +1590,7 @@ pub fn ConversationalAi() -> Element {
                                         idx.insert(0, ConversationMeta {
                                             id: id.clone(),
                                             title: "New chat".to_string(),
+                                            pinned: false,
                                         });
                                         save_index(&idx);
                                         conversations.set(idx);
@@ -1877,8 +1735,51 @@ pub fn ConversationalAi() -> Element {
                                     if t.is_playing { "Now playing" } else { "On deck" }
                                 }
                                 div { class: "flex flex-col flex-1 min-w-0",
-                                    span { class: "font-medium truncate",
-                                        "{t.title.clone().unwrap_or_default()}"
+                                    {
+                                        let info_title = t.title.clone().unwrap_or_default();
+                                        let info_artist = t.artist.clone().unwrap_or_default();
+                                        let info_disabled = info_title.is_empty();
+                                        // Templated chat turn — explicit title+artist so the
+                                        // agent answers about the right track even if zones
+                                        // change between click and reply.
+                                        let info_msg = if info_artist.is_empty() {
+                                            format!(
+                                                "Tell me about the song \"{}\" — its history, any background on the composer or performers, and anything else notable.",
+                                                info_title
+                                            )
+                                        } else {
+                                            format!(
+                                                "Tell me about \"{}\" by {} — its history, any background on the composer or performers, and anything else notable.",
+                                                info_title, info_artist
+                                            )
+                                        };
+                                        rsx! {
+                                            div { class: "flex items-center gap-1.5 min-w-0",
+                                                span { class: "font-medium truncate",
+                                                    "{info_title}"
+                                                }
+                                                button {
+                                                    class: if info_disabled {
+                                                        "shrink-0 text-muted-foreground/40 text-sm leading-none px-1 cursor-not-allowed"
+                                                    } else {
+                                                        "shrink-0 text-muted hover:text-foreground transition-colors text-sm leading-none px-1"
+                                                    },
+                                                    disabled: info_disabled,
+                                                    title: "Tell me about this song",
+                                                    "aria-label": "Tell me about this song",
+                                                    onclick: move |_| do_send_text(
+                                                        info_msg.clone(),
+                                                        messages,
+                                                        loading,
+                                                        selected_zone,
+                                                        speech,
+                                                        current_track,
+                                                        recent_tracks,
+                                                    ),
+                                                    "ℹ️"
+                                                }
+                                            }
+                                        }
                                     }
                                     {
                                         let parts: Vec<String> = [t.artist.clone(), t.album.clone()]
@@ -2086,7 +1987,195 @@ pub fn ConversationalAi() -> Element {
                 }
             }
 
-            div { class: "grid grid-cols-1 lg:grid-cols-2 gap-6 items-start",
+            div { class: "grid grid-cols-1 lg:grid-cols-[16rem_1fr] gap-6 items-start",
+
+                // Conversation sidebar — leftmost column on lg+, hidden on
+                // smaller screens (the header dropdown above is the small-
+                // screen fallback). Sticky so it stays visible while the
+                // chat column scrolls. Active row highlighted; hover reveals
+                // 📌 / 🗑 actions; double-click the title to rename inline.
+                aside {
+                    class: "hidden lg:flex flex-col gap-1 sticky top-4 self-start max-h-[calc(100vh-2rem)] overflow-y-auto pr-1",
+                    div { class: "flex items-center justify-between px-1 mb-1",
+                        h2 { class: "text-xs font-semibold text-muted uppercase tracking-wide", "Conversations" }
+                        button {
+                            class: "btn btn-outline btn-sm",
+                            title: "New conversation",
+                            onclick: move |_| {
+                                let id = generate_conversation_id();
+                                let mut idx = conversations.read().clone();
+                                idx.insert(0, ConversationMeta {
+                                    id: id.clone(),
+                                    title: "New chat".to_string(),
+                                    pinned: false,
+                                });
+                                save_index(&idx);
+                                conversations.set(idx);
+                                current_id.set(id);
+                                messages.set(Vec::new());
+                            },
+                            "+ New"
+                        }
+                    }
+                    {
+                        let cur = current_id.read().clone();
+                        // Stable sort by `pinned` desc — pinned rows float to
+                        // the top, insertion order preserved within each group.
+                        let mut sorted = conversations.read().clone();
+                        sorted.sort_by(|a, b| b.pinned.cmp(&a.pinned));
+                        let editing_now = editing_id.read().clone();
+                        rsx! {
+                            for c in sorted.into_iter() {
+                                {
+                                    let row_id = c.id.clone();
+                                    let row_id_click = row_id.clone();
+                                    let row_id_dbl = row_id.clone();
+                                    let row_id_pin = row_id.clone();
+                                    let row_id_del = row_id.clone();
+                                    let row_id_blur = row_id.clone();
+                                    let row_id_kd = row_id.clone();
+                                    let title_for_dbl = c.title.clone();
+                                    let pinned = c.pinned;
+                                    let is_active = row_id == cur;
+                                    let is_editing = editing_now.as_deref() == Some(row_id.as_str());
+                                    rsx! {
+                                        div {
+                                            key: "{row_id}",
+                                            class: if is_active {
+                                                "group flex items-center gap-1 px-2 py-1.5 rounded-md bg-primary/10 text-primary text-sm cursor-pointer"
+                                            } else {
+                                                "group flex items-center gap-1 px-2 py-1.5 rounded-md hover:bg-muted text-sm cursor-pointer"
+                                            },
+                                            onclick: move |_| {
+                                                if editing_id.read().as_deref() == Some(row_id_click.as_str()) {
+                                                    return;
+                                                }
+                                                if row_id_click == *current_id.read() {
+                                                    return;
+                                                }
+                                                let loaded = load_messages_from_storage(&row_id_click);
+                                                current_id.set(row_id_click.clone());
+                                                messages.set(loaded);
+                                            },
+                                            ondoubleclick: move |_| {
+                                                editing_text.set(title_for_dbl.clone());
+                                                editing_id.set(Some(row_id_dbl.clone()));
+                                            },
+                                            if pinned {
+                                                span { class: "text-xs leading-none shrink-0", "📌" }
+                                            }
+                                            if is_editing {
+                                                input {
+                                                    class: "flex-1 min-w-0 bg-background border border-border rounded px-1 py-0.5 text-sm",
+                                                    value: "{editing_text}",
+                                                    autofocus: true,
+                                                    oninput: move |e| editing_text.set(e.value()),
+                                                    onkeydown: move |e| {
+                                                        if e.key() == Key::Enter {
+                                                            let new_title = editing_text.read().trim().to_string();
+                                                            if !new_title.is_empty() {
+                                                                let mut idx = conversations.read().clone();
+                                                                for entry in idx.iter_mut() {
+                                                                    if entry.id == row_id_kd {
+                                                                        entry.title = new_title.clone();
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                save_index(&idx);
+                                                                conversations.set(idx);
+                                                            }
+                                                            editing_id.set(None);
+                                                        } else if e.key() == Key::Escape {
+                                                            editing_id.set(None);
+                                                        }
+                                                    },
+                                                    onblur: move |_| {
+                                                        let new_title = editing_text.read().trim().to_string();
+                                                        if !new_title.is_empty() {
+                                                            let mut idx = conversations.read().clone();
+                                                            for entry in idx.iter_mut() {
+                                                                if entry.id == row_id_blur {
+                                                                    entry.title = new_title.clone();
+                                                                    break;
+                                                                }
+                                                            }
+                                                            save_index(&idx);
+                                                            conversations.set(idx);
+                                                        }
+                                                        editing_id.set(None);
+                                                    },
+                                                }
+                                            } else {
+                                                span { class: "flex-1 min-w-0 truncate", "{c.title}" }
+                                                button {
+                                                    class: "opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1 hover:text-foreground shrink-0",
+                                                    title: if pinned { "Unpin" } else { "Pin to top" },
+                                                    onclick: move |e| {
+                                                        e.stop_propagation();
+                                                        let mut idx = conversations.read().clone();
+                                                        for entry in idx.iter_mut() {
+                                                            if entry.id == row_id_pin {
+                                                                entry.pinned = !entry.pinned;
+                                                                break;
+                                                            }
+                                                        }
+                                                        save_index(&idx);
+                                                        conversations.set(idx);
+                                                    },
+                                                    if pinned { "📌" } else { "📍" }
+                                                }
+                                                button {
+                                                    class: "opacity-0 group-hover:opacity-100 transition-opacity text-xs px-1 hover:text-red-500 shrink-0",
+                                                    title: "Delete conversation",
+                                                    onclick: move |e| {
+                                                        e.stop_propagation();
+                                                        let id = row_id_del.clone();
+                                                        let mut idx = conversations.read().clone();
+                                                        if idx.len() <= 1 {
+                                                            // Last one — wipe messages and reset
+                                                            // to "New chat" so auto-title can fire
+                                                            // again. Mirrors the header Clear path.
+                                                            for entry in idx.iter_mut() {
+                                                                if entry.id == id {
+                                                                    entry.title = "New chat".to_string();
+                                                                    entry.pinned = false;
+                                                                    break;
+                                                                }
+                                                            }
+                                                            save_index(&idx);
+                                                            conversations.set(idx);
+                                                            if id == *current_id.read() {
+                                                                messages.set(Vec::new());
+                                                            }
+                                                            delete_conversation_storage(&id);
+                                                            return;
+                                                        }
+                                                        let was_current = id == *current_id.read();
+                                                        idx.retain(|c| c.id != id);
+                                                        delete_conversation_storage(&id);
+                                                        save_index(&idx);
+                                                        let next_id = idx[0].id.clone();
+                                                        let next_msgs = if was_current {
+                                                            load_messages_from_storage(&next_id)
+                                                        } else {
+                                                            messages.read().clone()
+                                                        };
+                                                        conversations.set(idx);
+                                                        if was_current {
+                                                            current_id.set(next_id);
+                                                            messages.set(next_msgs);
+                                                        }
+                                                    },
+                                                    "🗑"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 div { class: "flex flex-col gap-3",
 
@@ -2322,41 +2411,6 @@ pub fn ConversationalAi() -> Element {
                     }
                 }
 
-                div { class: "flex flex-col gap-2",
-                    h2 { class: "text-xs font-semibold uppercase tracking-widest text-muted mb-1", "Tool Calls" }
-
-                    if !has_actions && !*loading.read() {
-                        div { class: "rounded-lg border border-dashed border-border p-6 text-sm text-muted text-center",
-                            if messages.read().is_empty() {
-                                "Tool calls will appear here as the AI works"
-                            } else {
-                                "No tool calls yet"
-                            }
-                        }
-                    } else {
-                        div { class: "flex flex-col gap-1",
-                            for msg in messages.read().iter() {
-                                for action in &msg.actions {
-                                    {
-                                        let action = action.clone();
-                                        rsx! {
-                                            div {
-                                                class: "rounded-md border border-border bg-muted/40 px-3 py-1.5 font-mono text-xs text-muted break-all",
-                                                "⚡ {action}"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if *loading.read() {
-                                div {
-                                    class: "rounded-md border border-dashed border-border px-3 py-1.5 font-mono text-xs text-muted animate-pulse",
-                                    "⚡ calling…"
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             // Album-art lightbox. Native <dialog> renders in the browser's
