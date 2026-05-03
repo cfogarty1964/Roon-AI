@@ -4219,3 +4219,192 @@ The scheduled agent at `trig_011yn1keYv8RsozhbSYz5LUR` will run on 2026-05-08 an
 ### Decision (2026-05-01 end-of-day)
 
 **Ready to tag `v3.9.0` when convenient.** Service is up at `https://localhost:8088`, all features working, no known regressions. Real usage during the week between now and the scheduled 2026-05-08 check-in will be the final stress test.
+
+---
+
+## Real-Usage Note (2026-05-02) — pretrained "Hey Jarvis" false-positive friction
+
+User reports: after the chat-turn / TTS feedback-loop fix landed, the wake-word listener correctly resumes when idle — but the **pretrained Hey Jarvis classifier triggers on ambient room speech** (similar phonemes: "Hey Travis", "Hey Jordan", general loud conversation passing through Silero VAD). This is a known weakness of generic pretrained openWakeWord models.
+
+### Custom "Hey Roon" training: in progress, paused
+
+User started the official openWakeWord Colab (the simple `automatic_model_training_simple.ipynb`):
+
+- **Drive copy created**: yes, with `target_word = hey_roon`
+- **Section 1 (pronunciation preview)**: ✅ ran, audio sounded right
+- **Section 2 (Download Data, ~15 min)**: not yet run
+- **Section 3 (Train, ~30–60 min CPU)**: not yet run
+- **Output target**: `wake_word.onnx` (download → save as `public/wake-word/models/wake_word.onnx` overwriting the Jarvis fallback → rebuild → restart)
+
+User paused on 2026-05-02 — will resume the training run another day. Their Drive copy preserves the `hey_roon` config; pickup is just **Runtime → Run all** in the saved notebook.
+
+### Daily-use workaround until then
+
+Two options for living with the false positives:
+1. **Threshold = 0.85** — Settings slider. Stricter, fewer false triggers, requires clearer enunciation when actually waking the AI.
+2. **Wake word off** — use the 🎙 button manually. Lowest-friction default until the custom model lands.
+
+User's choice: TBD; recommendation in the closing message was option (2) for the next day or two.
+
+### When the user returns
+
+The pickup is mechanical:
+1. Open the saved Drive copy of the Colab notebook (`Copy of automatic_model_training_simple.ipynb`)
+2. Verify `target_word` field still says `hey_roon`
+3. Runtime → Run all → wait ~45–75 min
+4. Download `hey_roon.onnx` from `/content/my_custom_model/` in the Colab file browser
+5. Save as `D:\OneDrive - 221B\SCRIPTS\Roon AI\public\wake-word\models\wake_word.onnx` (overwriting fallback)
+6. Quit `roon-ai.exe`, `cargo build --release --features server`, restart
+7. Toggle wake word on, say "Hey Roon" — should fire reliably with near-zero false positives in normal room conditions.
+
+No code changes needed. Pure asset swap + rebuild.
+
+---
+
+## Recent Work (2026-05-02) — Custom "Hey Roon" trained + always-on STT bug fixed
+
+User picked the training back up later the same day. Total real-time spent today: probably ~30 min of clicking + ~75 min of Colab compute + ~10 min of debugging the follow-up bug + 3 min rebuild. Wake word now wakes on **"Hey Roon"** (the user's actual phrase) and the mic correctly closes between turns.
+
+### Training run
+
+Used the simple notebook (`automatic_model_training_simple.ipynb`). Default settings:
+- `number_of_examples = 1000`
+- `number_of_training_steps = 10000`
+- `false_activation_penalty` slider at default
+- `target_word = "hey_roon"` (underscore-separated, lowercase — required by the notebook)
+- Pronunciation preview confirmed it sounded like "hey roon" rhyming with "moon"
+
+The DeepPhonemizer fallback predicted phones `[HH][EY]-[R][UW][N]` for `Hey_Roon` (the word wasn't in CMU dict). That's correct — the synthesised audio rhymes with "moon" exactly as we want.
+
+Training pipeline ran cleanly through:
+- Section 1: pronunciation preview (~30 s)
+- Section 2: data download (~15 min)
+- Section 3: data generation (positive + negative, ~30 min) → feature computation → 3 training sequences (~16 min total) → ONNX export (~1 min)
+
+### Final metrics (from the notebook output)
+
+| Metric | Value | Read |
+|---|---|---|
+| Accuracy | 0.727 | Moderate. |
+| Recall | 0.456 | ~half of Hey Roon attempts may not register on first try. |
+| False Positives per Hour | 0.88 | ~1 false trigger per hour idle. |
+
+Mediocre by wake-word-model standards (production models usually target Recall > 0.85). The simple notebook with 1k examples + 10k steps is a "first taste" config; quality scales hard with `number_of_examples = 30000` and `number_of_training_steps = 30000` (~3 hours, dramatically better metrics).
+
+**In real-world use the model performs noticeably better than the metrics suggest** — user reports it "works really well." The metrics are computed against held-out synthetic data which is more adversarial than typical real-world room audio.
+
+If false-trigger frequency or missed-wake frequency surfaces as friction later, the path is: re-run the Colab with bumped parameters, swap the new `.onnx` into `public/wake-word/models/wake_word.onnx`, rebuild.
+
+### One harmless training-time error
+
+The notebook produced a `ModuleNotFoundError: No module named 'onnx_tf'` during the TFLite conversion stage at the end. We don't use TFLite anywhere in this project (only the `.onnx` for openWakeWord WASM). Ignored. The `.onnx` was already saved successfully before the error.
+
+### Deployment
+
+Mechanical:
+
+1. Right-clicked `Hey_Roon.onnx` (capital H/R) in the Colab `my_custom_model` folder → Download
+2. Moved + renamed to `D:\OneDrive - 221B\SCRIPTS\Roon AI\public\wake-word\models\wake_word.onnx` (lowercase, overwriting Jarvis fallback)
+3. Stopped `roon-ai.exe`, `cargo build --release --features server` (~3 min — no `dx build` needed since only an asset changed; `cargo build` re-embeds via `WakeWordAssets`)
+4. Restarted, toggled wake word in Settings, said "Hey Roon" — fired immediately
+
+The Hey Roon classifier is 202 KB (vs the 1.21 MB Jarvis fallback). Smaller because the simple-notebook architecture is more compact.
+
+### Bug surfaced + fixed: always-on STT after a Hey Roon turn
+
+Once Hey Roon was working, user reported the mic stayed open indefinitely after a command, picking up ambient room voices and treating them as follow-up turns.
+
+**Root cause**: `do_send_text` had an unconditional hands-free auto-restart at the bottom of the consumer loop —
+```rust
+if done_seen && *speech.continuous.read() {
+    start_listening_task(...);
+}
+```
+With wake word + hands-free both ON, every completed turn re-opened STT for the next utterance. That's what hands-free is *for* in standalone mode. But with wake word as the new gate, it became a foot-gun: the listener was effectively always-on between Hey Roon utterances.
+
+**Fix**: gate the auto-restart on `!wake_word_enabled`. Added `wake_word_enabled: Signal<bool>` to `SpeechCtx`, populated from `wake_ctx.enabled` at construction time, checked at the auto-restart site:
+```rust
+if done_seen && *speech.continuous.read() && !*speech.wake_word_enabled.read() {
+    start_listening_task(...);
+}
+```
+
+When wake word is on, hands-free is implicitly suppressed (wake word IS the gate). When wake word is off, hands-free works exactly as before. Both toggles coexist cleanly with no UI changes — user doesn't need to remember which mode they're in.
+
+### Files modified (third-pass-plus today)
+
+- `src/app/pages/conversational_ai.rs` — `SpeechCtx` gained `wake_word_enabled` field; `wake_ctx` lookup moved up before SpeechCtx construction; auto-restart conditional gained the `!wake_word_enabled` check; old separate `let wake_ctx = use_wake_word();` removed (consolidated into the earlier one)
+
+That's it. One file, ~10 lines net.
+
+### Pre-existing scheduled agent
+
+The 2026-05-08 soak-check agent (`trig_011yn1keYv8RsozhbSYz5LUR`) doesn't know about today's wake-word activation work. When it runs, its inspection logic will detect:
+- `wake_word.onnx` size ~202 KB → not the Jarvis fallback → user trained their own ✅
+- Recent commits will include today's fix → it'll factor that into "any wake-word firefighting?" check
+- Should still propose `v3.9.0` since the architecture is stable and the fix is small
+
+### Tag readiness
+
+Still **ready to tag `v3.9.0`** — today's work is purely additive on top of the 2026-05-01 architecture. Recommend waiting another day or two of real soak before tagging, but no architectural blockers remain.
+
+---
+
+## Where We Stand — End of 2026-05-02
+
+Everything from 2026-05-01's "End of day" snapshot still holds, plus:
+
+- Wake phrase = **"Hey Roon"** (the actual phrase, custom-trained)
+- STT mic closes correctly between Hey Roon turns (no more ambient capture)
+- Both the hands-free + wake-word toggles can sit in any state without conflict
+
+**No outstanding code work.** The next time something happens here it'll be either:
+1. The 2026-05-08 scheduled agent proposing the v3.9.0 tag
+2. The user manually tagging earlier
+3. A real-usage friction surface not yet seen
+4. (Optional, later) Re-training Hey Roon at higher quality — `number_of_examples = 30000`, `number_of_training_steps = 30000`, ~3 hours, dramatically better metrics. Single-file replace + rebuild like today.
+
+---
+
+## Recent Work (2026-05-02, fourth pass) — System prompt broadened (ℹ️ button fix)
+
+User clicked the ℹ️ song-info button (added in second-pass entry above) and got back a refusal:
+
+> *"That's a bit outside my wheelhouse! I'm purely a music playback assistant — I can play, queue, pause, and find music for you, but I'm not able to provide biographical or historical information about composers, performers, or works."*
+
+### Root cause
+
+The system prompt in [src/ai/mod.rs:481-500](src/ai/mod.rs#L481-L500) was scoped narrowly:
+
+> *"You are an AI assistant controlling a hi-fi audio system. You have access to tools that let you discover playback zones and control music playback."*
+
+Claude (correctly) interpreted that as: my role is playback control, full stop. When the ℹ️ button submitted *"Tell me about '{title}' by {artist} — its history…"*, Claude treated it as out-of-scope and refused.
+
+This was a latent bug — the second-pass entry shipped the button but never tested it would actually elicit substantive replies. It worked fine when the API request was *implicitly* about a track ("what is this?") because the existing track_hint in the prompt explicitly mentioned similar phrases. The explicit *"tell me the history"* request fell outside that whitelist.
+
+### Fix
+
+Broadened the system prompt to explicitly grant Claude two modes:
+
+```
+You are an AI assistant for a hi-fi audio system. You do two things:
+(1) you control music playback via tools (discover zones, play, pause, queue, search, seed Roon Radio), and
+(2) you talk about music — composers, performers, ensembles, history, recording context,
+    notable interpretations, genre background, why a piece matters — whenever the user asks.
+Both modes are equally valid and often combine in the same reply. Never refuse a music-knowledge question
+on the grounds that you're 'just a playback assistant' — you're not.
+```
+
+Plus a length-shaping clause: confirmation replies stay one or two sentences; knowledge replies "reply at whatever length the question warrants — typically a short paragraph or two — and cite specific facts when you know them."
+
+### Files modified
+
+- `src/ai/mod.rs` — system prompt in `system_prompt()`. ~14 lines changed (split single sentence into a two-mode framing + added the no-refusal clause + length-shaping for knowledge replies).
+
+### Build / smoke
+
+`cargo build --release --features server` (~3 min — server-only change, no `dx build` needed). Service back up, ℹ️ button now answers substantively about composers / performers / history. Free-form prose questions like *"what's the story behind this album?"* also work.
+
+### Tag readiness
+
+Still **ready to tag `v3.9.0`**. This is a small server-side prompt fix on top of the existing scope; doesn't change architecture or surface.

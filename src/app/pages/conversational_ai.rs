@@ -168,6 +168,13 @@ struct SpeechCtx {
     /// for several seconds. The wake-word listener uses this to pause
     /// detection during TTS so the AI's own reply doesn't loop-trigger.
     speaking: Signal<bool>,
+    /// Mirrors `WakeWordContext::enabled` so `do_send_text` can suppress
+    /// the hands-free auto-restart when wake word is on (otherwise STT
+    /// re-opens after each turn and the mic stays effectively always-on,
+    /// catching ambient room voices). When wake word is the gate, the
+    /// user re-triggers the next turn by saying "Hey Roon" — the
+    /// hands-free auto-restart becomes redundant and harmful.
+    wake_word_enabled: Signal<bool>,
 }
 
 fn do_send_text(
@@ -322,7 +329,12 @@ fn do_send_text(
             speaking.set(false);
         }
 
-        if done_seen && *speech.continuous.read() {
+        // Hands-free auto-restart: re-open STT for a follow-up turn, but
+        // ONLY if wake word is off. When wake word is the gating mechanism,
+        // re-opening here would leave the mic effectively always-on and
+        // pick up ambient room voices. The user re-triggers the next turn
+        // by saying "Hey Roon".
+        if done_seen && *speech.continuous.read() && !*speech.wake_word_enabled.read() {
             start_listening_task(messages, loading, selected_zone, speech, current_track, recent_tracks);
         }
     });
@@ -1121,7 +1133,18 @@ pub fn ConversationalAi() -> Element {
     let mut stt_supported = use_signal(|| true);
     // Voice choice lives in shared context (set on Settings page)
     let voice_ctx = use_voice();
-    let speech = SpeechCtx { speak_enabled, continuous, listening, selected_voice: voice_ctx.selected, speaking };
+    // Wake-word context: needed both for the SpeechCtx (so `do_send_text`
+    // can suppress hands-free auto-restart while wake word gates turns)
+    // and for the page-local pause/resume effect below.
+    let wake_ctx = use_wake_word();
+    let speech = SpeechCtx {
+        speak_enabled,
+        continuous,
+        listening,
+        selected_voice: voice_ctx.selected,
+        speaking,
+        wake_word_enabled: wake_ctx.enabled,
+    };
 
     // Install JS speech module on mount; report STT support. (The wake-word
     // engine install + listener live in `wake_word_context.rs` so they run
@@ -1134,10 +1157,6 @@ pub fn ConversationalAi() -> Element {
             }
         });
     });
-
-    // Wake-word: shared context (toggle + threshold live in Settings page;
-    // engine + listener run at app root via use_wake_word_provider).
-    let wake_ctx = use_wake_word();
 
     // Pause the wake-word listener while we're busy: a request is in flight
     // (`loading`), the STT mic is open (`listening`), or TTS is actively
