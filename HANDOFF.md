@@ -4408,3 +4408,115 @@ Plus a length-shaping clause: confirmation replies stay one or two sentences; kn
 ### Tag readiness
 
 Still **ready to tag `v3.9.0`**. This is a small server-side prompt fix on top of the existing scope; doesn't change architecture or surface.
+
+---
+
+## Recent Work (2026-05-03) — Hey Roon retrained + tool_use.input null bug
+
+### Higher-quality Hey Roon model
+
+Re-ran the openWakeWord Colab with bumped settings — `number_of_examples = 30000`, `number_of_training_steps = 30000`, ~3 hours. Same notebook, same `target_word = hey_roon`, just more data and longer training. Output `Hey_Roon.onnx` is the same 202 KB (architecture unchanged; only weights differ).
+
+Deployment: identical to the first deployment — download, rename to `wake_word.onnx`, drop into `public/wake-word/models/`, `cargo build --release --features server` (~3 min), restart. No `dx build` needed (only an embedded asset changed; `WakeWordAssets` re-embeds via `cargo build`).
+
+User reports the new model performs noticeably better in real-room conditions. Metrics from this training run weren't captured here — if real-usage friction surfaces, retrain again with default values logged for the historical record.
+
+### Bug surfaced: Anthropic API 400 — `tool_use.input` null
+
+While using the system, user hit:
+
+```
+Anthropic API error 400 Bad Request: messages.1.content.0.tool_use.input: Input should be an object
+```
+
+**Root cause**: in [src/ai/mod.rs](src/ai/mod.rs) the streaming SSE consumer's `BlockBuilder::finalize` for `ToolUse` blocks fell back to `Value::Null` when `input_json` couldn't be parsed:
+
+```rust
+let input: Value = serde_json::from_str(&input_json).unwrap_or(Value::Null);
+```
+
+For tools that take no arguments (like `list_zones`, the most-called tool in this app), Anthropic's streaming API sends zero `input_json_delta` events — which leaves `input_json` as an empty string. `serde_json::from_str("")` fails. We fell back to `Null`. The next agentic-loop iteration sent the prior `tool_use` block back to Anthropic, this time over a non-streaming POST that strictly validates: `input` MUST be an object, even `{}` for no-arg tools. Hence the 400.
+
+This was a **silent latent bug** — present since the streaming codepath shipped (v3.6.0). Only triggered when the agent did a multi-step tool chain involving any no-arg tool — which had clearly happened in production, but somehow never reported until today. Possibly because the most common single-step turns ("play X on Y") don't route through this codepath, and multi-step chains are less common.
+
+**Fix**: fall back to `Value::Object(serde_json::Map::new())` (i.e. `{}`) instead of `Null`. One-liner change at [src/ai/mod.rs:645](src/ai/mod.rs#L645) plus comment explaining the constraint.
+
+### Files modified
+
+- `src/ai/mod.rs` — the `BlockBuilder::finalize` default. ~5 lines changed (single-line fix + a multi-line comment explaining the Anthropic constraint).
+
+### Build / smoke
+
+`cargo build --release --features server` (~3 min, server-only). User confirmed "it's working now" after the rebuild — the multi-step tool chain that produced the error now completes cleanly.
+
+### Tag readiness
+
+Still on track for `v3.9.0`. This is purely a bug fix in code that's been in production since v3.6.0; doesn't change surface or scope. The 2026-05-08 scheduled agent will see this fix and factor it into its assessment.
+
+---
+
+## Where We Stand — End of 2026-05-03
+
+Two non-architectural follow-ups today:
+
+- **Hey Roon model upgrade** — same architecture, better-trained weights. Single-file replace, rebuild, restart. No code changes.
+- **`tool_use.input` null bug** — one-line fix in `src/ai/mod.rs`. Latent since v3.6.0; surfaced today.
+
+Plus the scheduled-agent context: when `trig_011yn1keYv8RsozhbSYz5LUR` runs on 2026-05-08, it'll see four commits beyond `v3.8.1`:
+
+1. `c2b13eb` (2026-05-01) — feat: sidebar + ℹ️ button + openWakeWord wake word
+2. `a43e852` (2026-05-02) — fix: post-Hey Roon polish (STT auto-close + ℹ️ knowledge replies)
+3. (uncommitted, 2026-05-03 — to be committed) — fix: tool_use.input null on streaming tool deltas
+
+The scheduled agent should propose `v3.9.0` since the architecture is stable, all surface scope shipped, and today's bug-fix is small and well-scoped.
+
+**No outstanding code work.** Real usage continues to drive the priority.
+
+---
+
+## Recent Work (2026-05-04) — STT timeout (TV audio) + Start Menu shortcuts
+
+Two unrelated friction points addressed today.
+
+### STT mic hanging under continuous ambient audio
+
+User reported: with TV on, after wake-word fires the STT mic stays open for 30+ seconds, picking up everything in the room and submitting it as one mega-command. The Web Speech API is supposed to auto-close after a phrase (`continuous=false`) but with constant ambient audio it never sees a clean silence gap.
+
+**Iterations** (each rebuild/test cycle revealed the next layer):
+
+1. **Added an 8s setTimeout calling `r.stop()`.** Didn't work — `stop()` is "polite", waits for the current utterance to end, which under continuous audio never happens. So stop() effectively hung.
+
+2. **Switched to `r.abort()` + dropped to 6s.** abort() forcibly terminates without waiting. 6s was too aggressive — normal sentences got cut off mid-word.
+
+3. **Final: `abort()` at 12 seconds.** Sweet spot: any normal command (typically 2-5s) finishes naturally; the 12s cap only fires when the user wandered away or there's pure noise.
+
+Plus: added `console.log("[STT] ...")` diagnostic lines (`onstart`, `onresult`, `onerror`, `onend`, `onspeechend`, `onaudioend`, plus timing) so future debug cycles can verify exactly which API event happened and when. Logs are verbose but harmless in production.
+
+The existing manual stop path (red ■ button replacing 🎤 while listening, calling `RoonSpeech.stopListening()`) was already wired up — no change there. User can interrupt at any time by clicking it.
+
+### Mic-indicator clarification
+
+User observed that the browser's mic indicator (address-bar dot) stayed on between turns and asked if it was a bug. Explained: the indicator is on continuously because openWakeWord's listener has the mic open (it has to, to detect "Hey Roon"). STT mic and wake-word mic share the same `getUserMedia` permission, so the browser shows one indicator for both. STT only actively captures during turns; the indicator's persistence is the wake-word listener, not STT.
+
+To turn the indicator off entirely: toggle wake word off in Settings. Then 🎤 button is the only way to start STT. By design.
+
+### Start Menu shortcuts
+
+User wanted a clickable launcher in the Start Menu instead of running the binary from a terminal. Created two shortcuts in `%APPDATA%\Microsoft\Windows\Start Menu\Programs`:
+
+- **Roon AI.url** — opens `https://localhost:8088` in default browser. Daily-use shortcut for accessing the running app.
+- **Roon AI (Launch).lnk** — runs `target\release\roon-ai.exe`. Useful only after manually quitting from the tray.
+
+Both use the binary's embedded icon. Pinnable to taskbar via right-click in Start Menu → Pin to taskbar.
+
+Note: the existing `build/windows/installer.wxs` already wires up a similar URL shortcut as part of the MSI build, but the MSI requires WiX Toolset and produces a "proper" install (auto-start + Add/Remove Programs). For personal use, the inline-created shortcuts are simpler. The MSI pipeline is still there for distribution.
+
+### Files modified
+
+- `src/app/pages/conversational_ai.rs` — `RoonSpeech.startListening()` JS: timeout 8s/stop → 12s/abort, plus diagnostic logging block
+
+### What's actually next
+
+Same as previous "Where We Stand" — `v3.9.0` tag whenever convenient; binary-size trim is the only architectural follow-up. Nothing urgent.
+
+The 2026-05-08 scheduled agent (`trig_011yn1keYv8RsozhbSYz5LUR`) will see today's commit alongside the prior days' commits and propose the tag PR if no firefighting commits land between now and then.

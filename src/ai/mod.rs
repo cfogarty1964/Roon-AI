@@ -642,7 +642,15 @@ impl BlockBuilder {
         match self {
             BlockBuilder::Text(text) => Some(ContentBlock::Text { text }),
             BlockBuilder::ToolUse { id, name, input_json } => {
-                let input: Value = serde_json::from_str(&input_json).unwrap_or(Value::Null);
+                // Anthropic requires `tool_use.input` to be an object even
+                // when the tool takes no arguments. Tools like `list_zones`
+                // produce an empty `input_json` string from the stream
+                // (no input deltas), so empty/parse-failure → `{}` not
+                // `null`. Sending `null` here triggers a 400 on the next
+                // API call: "messages.N.content.0.tool_use.input: Input
+                // should be an object".
+                let input: Value = serde_json::from_str(&input_json)
+                    .unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
                 Some(ContentBlock::ToolUse { id, name, input })
             }
         }

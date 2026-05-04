@@ -710,11 +710,32 @@ if (!window.RoonSpeech) {
                 r.continuous = false;
                 r.maxAlternatives = 1;
                 let result = "";
-                r.onresult = (e) => { result = e.results[0][0].transcript; };
-                r.onerror = (e) => { _recog = null; reject(e.error || "error"); };
-                r.onend = () => { _recog = null; resolve(result); };
+                // Hard-cap the session at 12 seconds. With `continuous=false`
+                // the Web Speech API is supposed to auto-close after a phrase,
+                // but with constant ambient audio (TV, room conversation,
+                // music) it never sees a clean silence gap and runs until its
+                // own internal timeout. We use `abort()` rather than `stop()`
+                // because stop() is polite — it waits for the current
+                // utterance to end, which never happens under continuous
+                // audio. abort() forcibly terminates. 12 seconds gives slow
+                // speech + thinking pauses comfortable room while still
+                // bounding the worst case if the user wandered away mid-turn.
+                const t0 = Date.now();
+                console.log("[STT] startListening at t=0");
+                let timeoutHandle = setTimeout(() => {
+                    console.log("[STT] 12s hard-cap timeout firing — calling abort() at t=" + (Date.now() - t0) + "ms");
+                    try { r.abort(); console.log("[STT] abort() returned cleanly"); }
+                    catch (e) { console.log("[STT] abort() threw:", e); }
+                }, 12000);
+                const clearT = () => { if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; } };
+                r.onstart = () => { console.log("[STT] onstart at t=" + (Date.now() - t0) + "ms"); };
+                r.onresult = (e) => { clearT(); result = e.results[0][0].transcript; console.log("[STT] onresult at t=" + (Date.now() - t0) + "ms — '" + result + "'"); };
+                r.onerror = (e) => { clearT(); _recog = null; console.log("[STT] onerror at t=" + (Date.now() - t0) + "ms:", e.error); reject(e.error || "error"); };
+                r.onend = () => { clearT(); _recog = null; console.log("[STT] onend at t=" + (Date.now() - t0) + "ms"); resolve(result); };
+                r.onspeechend = () => { console.log("[STT] onspeechend at t=" + (Date.now() - t0) + "ms"); };
+                r.onaudioend = () => { console.log("[STT] onaudioend at t=" + (Date.now() - t0) + "ms"); };
                 _recog = r;
-                try { r.start(); } catch (e) { _recog = null; reject(String(e)); }
+                try { r.start(); } catch (e) { clearT(); _recog = null; console.log("[STT] start() threw:", e); reject(String(e)); }
             });
         },
         stopListening() {
