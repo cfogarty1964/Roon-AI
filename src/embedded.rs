@@ -36,8 +36,14 @@ use tower::{Layer, Service};
 /// Embedded assets from dx build output.
 /// The `allow_missing = true` attribute lets this compile even when the folder doesn't exist
 /// (e.g., during development without running dx build first).
+///
+/// `wake-word/*` is excluded because dx mirrors `public/wake-word/` into its
+/// output dir, but those assets are already served via `WakeWordAssets` at
+/// `/wake-word/{*path}`. Embedding them through `PublicAssets` too is dead
+/// weight (~25 MB+ of duplicate ort-wasm + ONNX models).
 #[derive(Embed)]
 #[folder = "target/dx/roon-ai/release/web/public/"]
+#[exclude = "wake-word/*"]
 #[allow_missing = true]
 pub struct PublicAssets;
 

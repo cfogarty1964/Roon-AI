@@ -72,8 +72,15 @@ else
     echo "         The wake word will be off until you drop in your own trained classifier." >&2
 fi
 
-echo "  Copying onnxruntime-web wasm runtime..."
-cp -f node_modules/onnxruntime-web/dist/ort-wasm*.wasm "$ort_dir/"
+# Copy onnxruntime-web runtime — JSEP variant only.
+# openwakeword-wasm-browser imports `onnxruntime-web/webgpu`, whose bundle
+# hardcodes ort-wasm-simd-threaded.jsep.{wasm,mjs}. The other variants
+# (base / asyncify / jspi) are never fetched at runtime, so shipping them
+# just bloats the binary by ~50 MB. If you ever rebuild openwakeword.js
+# against a non-webgpu ORT entry, copy the matching variant manually.
+echo "  Copying onnxruntime-web JSEP runtime (.wasm + .mjs)..."
+cp -f node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm "$ort_dir/"
+cp -f node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs "$ort_dir/"
 
 cat <<EOF
 

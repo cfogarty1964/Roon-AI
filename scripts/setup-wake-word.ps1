@@ -75,14 +75,15 @@ try {
         Write-Warning "Could not find hey_jarvis_v0.1.onnx in the npm tarball -- wake_word.onnx not seeded. The wake word will be off until you train and drop in your own classifier."
     }
 
-    # 6. Copy onnxruntime-web runtime. Each wasm variant has a paired .mjs
-    # ESM loader stub — ORT 1.23+ loads the .mjs first to bootstrap, so we
-    # need both extensions. We ship all variants (base / asyncify / jsep /
-    # jspi) because ORT picks one at runtime based on browser feature
-    # detection (Chromium tries JSEP first for WebGPU compatibility).
-    # Total ~80 MB; trim manually after install if binary size is critical.
-    Write-Host '  Copying onnxruntime-web runtime (.wasm + .mjs)...' -ForegroundColor Gray
-    Get-ChildItem 'node_modules/onnxruntime-web/dist/' -Filter 'ort-wasm*' |
+    # 6. Copy onnxruntime-web runtime — JSEP variant only.
+    # openwakeword-wasm-browser imports `onnxruntime-web/webgpu`, whose
+    # bundle hardcodes ort-wasm-simd-threaded.jsep.{wasm,mjs}. The other
+    # variants (base / asyncify / jspi) are never fetched at runtime, so
+    # shipping them just bloats the binary by ~50 MB. If you ever rebuild
+    # openwakeword.js against a non-webgpu ORT entry, copy the matching
+    # variant manually.
+    Write-Host '  Copying onnxruntime-web JSEP runtime (.wasm + .mjs)...' -ForegroundColor Gray
+    Get-ChildItem 'node_modules/onnxruntime-web/dist/' -Filter 'ort-wasm-simd-threaded.jsep.*' |
         Where-Object { $_.Extension -in '.wasm', '.mjs' } |
         Copy-Item -Destination $ortDir -Force
 } finally {
