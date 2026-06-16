@@ -1,4 +1,7 @@
-﻿use crate::app::api::{AiChatRequest, CurrentTrack, HistoryTurn, RecentTrack, Suggestion, Zone, ZonesResponse};
+﻿use crate::app::api::{
+    AiChatRequest, AlbumTracksCard, ArtistCard, CurrentTrack, HistoryTurn, RecentTrack,
+    Suggestion, Zone, ZonesResponse,
+};
 use crate::app::components::Layout;
 use crate::app::default_zone::use_default_zone;
 use crate::app::sse::use_sse;
@@ -102,6 +105,14 @@ struct ChatMessage {
     actions: Vec<String>,
     #[serde(default)]
     suggestions: Vec<Suggestion>,
+    /// Inline tracklist card resolved from an `<<<ALBUM_TRACKS>>>` sentinel.
+    /// `None` for user/error turns and for assistant turns where the AI didn't
+    /// emit the sentinel (or Roon couldn't resolve the album).
+    #[serde(default)]
+    album_tracks: Option<AlbumTracksCard>,
+    /// Inline top-albums card resolved from an `<<<ARTIST_CARD>>>` sentinel.
+    #[serde(default)]
+    artist_card: Option<ArtistCard>,
     /// True while the assistant turn is mid-stream. Renders as plain text
     /// (whitespace-preserving). Once the `done` event arrives, this flips to
     /// false and `text` becomes the rendered HTML body.
@@ -129,6 +140,10 @@ enum AgentEvent {
         response_markdown: String,
         #[serde(default)]
         suggestions: Vec<Suggestion>,
+        #[serde(default)]
+        album_tracks: Option<AlbumTracksCard>,
+        #[serde(default)]
+        artist_card: Option<ArtistCard>,
     },
     Error { message: String },
     /// Sent by STREAM_CONSUMER_JS after `Done` AND the TTS audio queue has
@@ -204,6 +219,8 @@ fn do_send_text(
         markdown: String::new(),
         actions: vec![],
         suggestions: vec![],
+        album_tracks: None,
+        artist_card: None,
         streaming: false,
         stream_parts: vec![],
     });
@@ -213,6 +230,8 @@ fn do_send_text(
         markdown: String::new(),
         actions: vec![],
         suggestions: vec![],
+        album_tracks: None,
+        artist_card: None,
         streaming: true,
         stream_parts: vec![],
     });
@@ -279,12 +298,14 @@ fn do_send_text(
                         m.stream_parts.push(StreamPart::Tool(summary));
                     }
                 }
-                Ok(AgentEvent::Done { response, response_markdown, suggestions }) => {
+                Ok(AgentEvent::Done { response, response_markdown, suggestions, album_tracks, artist_card }) => {
                     let mut msgs = messages.write();
                     if let Some(m) = msgs.get_mut(in_progress_idx) {
                         m.text = response;
                         m.markdown = response_markdown;
                         m.suggestions = suggestions;
+                        m.album_tracks = album_tracks;
+                        m.artist_card = artist_card;
                         m.streaming = false;
                     }
                     done_seen = true;
@@ -378,11 +399,20 @@ const voice = (payload && typeof payload.voice === "string") ? payload.voice : "
 // occasional false positives on abbreviations like 'Mr. Smith' (no perceptible
 // damage — TTS just briefly pauses where a human wouldn't).
 const SENTENCE_END = /[.!?](?:["')\]]+)?\s+(?=[A-Z"'(À-ɏ]|$)/;
-// Avoid speaking the suggestions sentinel itself if a token boundary lands on it.
-const SUGGESTIONS_OPEN = "<<<SUGGESTIONS>>>";
+// Avoid speaking any sentinel block aloud if a token boundary lands on it.
+// All three sentinels mark the start of machine-readable JSON not meant for TTS.
+const SENTINEL_OPENS = ["<<<SUGGESTIONS>>>", "<<<ALBUM_TRACKS>>>", "<<<ARTIST_CARD>>>"];
+function _earliestSentinelIdx(s) {
+    let best = -1;
+    for (const m of SENTINEL_OPENS) {
+        const i = s.indexOf(m);
+        if (i !== -1 && (best === -1 || i < best)) best = i;
+    }
+    return best;
+}
 const FORCE_FLUSH_LEN = 220; // force a chunk after this many chars even without a boundary
 let sentenceBuf = "";
-let suppressTts = false; // flips true once we encounter the suggestions block
+let suppressTts = false; // flips true once we encounter any sentinel block
 
 if (speakEnabled) {
     try { window.RoonSpeech.startTtsSession(voice); } catch (e) {}
@@ -392,9 +422,10 @@ function _flushSentenceBuf(force) {
     if (!speakEnabled || suppressTts) return;
     while (true) {
         if (!sentenceBuf) return;
-        // If we see the start of the suggestions sentinel, stop speaking from here
-        // on — the rest of the text is JSON not meant for TTS.
-        const sIdx = sentenceBuf.indexOf(SUGGESTIONS_OPEN);
+        // If any sentinel marker appears, stop speaking from there on — the
+        // rest of the text is JSON not meant for TTS. Whichever sentinel
+        // appears earliest wins.
+        const sIdx = _earliestSentinelIdx(sentenceBuf);
         if (sIdx === 0) { suppressTts = true; sentenceBuf = ""; return; }
         const m = SENTENCE_END.exec(sentenceBuf);
         if (m) {
@@ -509,7 +540,14 @@ fn start_listening_task(
     recent_tracks: Signal<Vec<RecentTrack>>,
 ) {
     let mut listening = speech.listening;
-    if *listening.read() || *loading.read() {
+    // Refuse to open STT while *anything* could feed audio into the mic that
+    // we don't want transcribed: another listen in progress, a request mid-
+    // flight, or — critically — TTS still playing. Without the speaking gate,
+    // the AI's own voice can be captured as a new "user message" and trigger
+    // a feedback loop. The wake-word use_effect already pauses the wake-word
+    // engine while speaking, but this guard catches the case where wake-word
+    // fires anyway (eval-pause race, acoustic echo, threshold trigger).
+    if *listening.read() || *loading.read() || *speech.speaking.read() {
         return;
     }
     listening.set(true);
@@ -729,7 +767,18 @@ if (!window.RoonSpeech) {
                 }, 12000);
                 const clearT = () => { if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; } };
                 r.onstart = () => { console.log("[STT] onstart at t=" + (Date.now() - t0) + "ms"); };
-                r.onresult = (e) => { clearT(); result = e.results[0][0].transcript; console.log("[STT] onresult at t=" + (Date.now() - t0) + "ms — '" + result + "'"); };
+                r.onresult = (e) => {
+                    clearT();
+                    result = e.results[0][0].transcript;
+                    console.log("[STT] onresult at t=" + (Date.now() - t0) + "ms — '" + result + "'");
+                    // Force-close the recognizer the moment we have a result.
+                    // With `continuous = false` the spec implies auto-close, but
+                    // some browsers wait for a silence period — and if TTS starts
+                    // before that silence, the recognizer can capture the AI's
+                    // own voice. abort() forcibly ends recognition; onend then
+                    // resolves the promise with `result` (the user's phrase).
+                    try { r.abort(); } catch (e2) {}
+                };
                 r.onerror = (e) => { clearT(); _recog = null; console.log("[STT] onerror at t=" + (Date.now() - t0) + "ms:", e.error); reject(e.error || "error"); };
                 r.onend = () => { clearT(); _recog = null; console.log("[STT] onend at t=" + (Date.now() - t0) + "ms"); resolve(result); };
                 r.onspeechend = () => { console.log("[STT] onspeechend at t=" + (Date.now() - t0) + "ms"); };
@@ -2036,25 +2085,53 @@ pub fn ConversationalAi() -> Element {
                 // 📌 / 🗑 actions; double-click the title to rename inline.
                 aside {
                     class: "hidden lg:flex flex-col gap-1 sticky top-4 self-start max-h-[calc(100vh-2rem)] overflow-y-auto pr-1",
-                    div { class: "flex items-center justify-between px-1 mb-1",
+                    div { class: "flex items-center justify-between px-1 mb-1 gap-1",
                         h2 { class: "text-xs font-semibold text-muted uppercase tracking-wide", "Conversations" }
-                        button {
-                            class: "btn btn-outline btn-sm",
-                            title: "New conversation",
-                            onclick: move |_| {
-                                let id = generate_conversation_id();
-                                let mut idx = conversations.read().clone();
-                                idx.insert(0, ConversationMeta {
-                                    id: id.clone(),
-                                    title: "New chat".to_string(),
-                                    pinned: false,
-                                });
-                                save_index(&idx);
-                                conversations.set(idx);
-                                current_id.set(id);
-                                messages.set(Vec::new());
-                            },
-                            "+ New"
+                        div { class: "flex items-center gap-1",
+                            button {
+                                class: "btn btn-outline btn-sm disabled:opacity-40",
+                                title: "Clear messages in the current conversation (keeps the entry)",
+                                disabled: messages.read().is_empty(),
+                                onclick: move |_| {
+                                    let id = current_id.read().clone();
+                                    if id.is_empty() {
+                                        return;
+                                    }
+                                    // Wipe storage for this conversation and reset its title so
+                                    // auto-title can fire again on the next exchange. Keeps the
+                                    // sidebar entry — use the per-row 🗑 to delete entirely.
+                                    let mut idx = conversations.read().clone();
+                                    for entry in idx.iter_mut() {
+                                        if entry.id == id {
+                                            entry.title = "New chat".to_string();
+                                            break;
+                                        }
+                                    }
+                                    save_index(&idx);
+                                    conversations.set(idx);
+                                    delete_conversation_storage(&id);
+                                    messages.set(Vec::new());
+                                },
+                                "Clear"
+                            }
+                            button {
+                                class: "btn btn-outline btn-sm",
+                                title: "New conversation",
+                                onclick: move |_| {
+                                    let id = generate_conversation_id();
+                                    let mut idx = conversations.read().clone();
+                                    idx.insert(0, ConversationMeta {
+                                        id: id.clone(),
+                                        title: "New chat".to_string(),
+                                        pinned: false,
+                                    });
+                                    save_index(&idx);
+                                    conversations.set(idx);
+                                    current_id.set(id);
+                                    messages.set(Vec::new());
+                                },
+                                "+ New"
+                            }
                         }
                     }
                     {
@@ -2236,6 +2313,8 @@ pub fn ConversationalAi() -> Element {
                             {
                                 let text = msg.text.clone();
                                 let suggestions = msg.suggestions.clone();
+                                let album_tracks = msg.album_tracks.clone();
+                                let artist_card = msg.artist_card.clone();
                                 let is_streaming = msg.streaming;
                                 let markdown = msg.markdown.clone();
                                 match msg.role {
@@ -2351,6 +2430,107 @@ pub fn ConversationalAi() -> Element {
                                                     }
                                                 }
                                             }
+                                            // Album track-list card. Only renders when the AI emitted
+                                            // an `<<<ALBUM_TRACKS>>>` sentinel AND the server resolved
+                                            // a non-empty tracklist via Roon Library. Each row's ▶
+                                            // submits `Play "{track}" from "{album}" by "{artist}"` as
+                                            // a new chat turn — routed through the agent so the actual
+                                            // play decision lives there (per the AI-chat-design memo).
+                                            if let Some(card) = album_tracks.as_ref().filter(|c| !c.tracks.is_empty()) {
+                                                {
+                                                    let card_album = card.album.clone();
+                                                    let card_artist = card.artist.clone().unwrap_or_default();
+                                                    let header = if card_artist.is_empty() {
+                                                        card_album.clone()
+                                                    } else {
+                                                        format!("{} — {}", card_album, card_artist)
+                                                    };
+                                                    let tracks: Vec<String> = card.tracks.clone();
+                                                    rsx! {
+                                                        details {
+                                                            class: "ml-2 rounded-lg border border-border bg-background/50 px-3 py-2 text-sm",
+                                                            open: true,
+                                                            summary {
+                                                                class: "cursor-pointer select-none font-medium",
+                                                                "💿 {header}"
+                                                            }
+                                                            div { class: "flex flex-col gap-1 mt-2",
+                                                                for (i, track) in tracks.iter().enumerate() {
+                                                                    {
+                                                                        let track = track.clone();
+                                                                        let album = card_album.clone();
+                                                                        let artist = card_artist.clone();
+                                                                        let play_msg = if artist.is_empty() {
+                                                                            format!("Play \"{}\" from \"{}\"", track, album)
+                                                                        } else {
+                                                                            format!("Play \"{}\" from \"{}\" by {}", track, album, artist)
+                                                                        };
+                                                                        let label = format!("{}. {}", i + 1, track);
+                                                                        let is_loading = *loading.read();
+                                                                        rsx! {
+                                                                            div {
+                                                                                class: "flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted/50",
+                                                                                button {
+                                                                                    class: "btn-primary px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                                    disabled: is_loading,
+                                                                                    onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                                    "▶"
+                                                                                }
+                                                                                span { class: "truncate", "{label}" }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Artist top-albums card. Same shape as the album tracklist
+                                            // card; per-album ▶ submits "Play '{album}' by {artist}" as
+                                            // a new chat turn, which lets the agent decide whether to
+                                            // play, queue, or just respond with more context.
+                                            if let Some(card) = artist_card.as_ref().filter(|c| !c.albums.is_empty()) {
+                                                {
+                                                    let card_artist = card.artist.clone();
+                                                    let albums: Vec<String> = card.albums.clone();
+                                                    rsx! {
+                                                        details {
+                                                            class: "ml-2 rounded-lg border border-border bg-background/50 px-3 py-2 text-sm",
+                                                            open: true,
+                                                            summary {
+                                                                class: "cursor-pointer select-none font-medium",
+                                                                "🎤 {card_artist}"
+                                                            }
+                                                            div { class: "flex flex-col gap-1 mt-2",
+                                                                for album in albums.iter() {
+                                                                    {
+                                                                        let album = album.clone();
+                                                                        let artist = card_artist.clone();
+                                                                        let play_msg = format!(
+                                                                            "Play \"{}\" by {}",
+                                                                            album, artist
+                                                                        );
+                                                                        let is_loading = *loading.read();
+                                                                        rsx! {
+                                                                            div {
+                                                                                class: "flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-muted/50",
+                                                                                button {
+                                                                                    class: "btn-primary px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                                    disabled: is_loading,
+                                                                                    onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                                    "▶"
+                                                                                }
+                                                                                span { class: "truncate", "{album}" }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     },
                                     Role::Error => rsx! {
@@ -2439,6 +2619,33 @@ pub fn ConversationalAi() -> Element {
                                     title: "{title_text}",
                                     onclick: on_mic,
                                     if is_listening { "■" } else { "🎤" }
+                                }
+                            }
+                        }
+                        // Stop-speaking button — only visible while TTS audio is
+                        // playing. Clicking aborts the queued audio via
+                        // RoonSpeech.cancelSpeech() and clears the `speaking`
+                        // signal so the wake-word listener can resume promptly.
+                        // The agent itself has already finished by the time we
+                        // get here (loading is false), so nothing to cancel
+                        // server-side.
+                        if *speaking_signal.read() {
+                            {
+                                let mut speaking_for_stop = speaking_signal;
+                                rsx! {
+                                    button {
+                                        class: "self-end px-3 py-2 text-sm rounded-md bg-amber-600 text-white hover:bg-amber-700",
+                                        title: "Stop speaking",
+                                        onclick: move |_| {
+                                            spawn(async move {
+                                                let _ = dioxus::document::eval(
+                                                    "if (window.RoonSpeech) window.RoonSpeech.cancelSpeech();"
+                                                ).join::<()>().await;
+                                            });
+                                            speaking_for_stop.set(false);
+                                        },
+                                        "⏹"
+                                    }
                                 }
                             }
                         }

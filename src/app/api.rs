@@ -342,6 +342,12 @@ pub struct AiChatResponse {
     pub actions: Vec<String>,
     #[serde(default)]
     pub suggestions: Vec<Suggestion>,
+    /// Track-list card resolved from a `<<<ALBUM_TRACKS>>>` sentinel.
+    #[serde(default)]
+    pub album_tracks: Option<AlbumTracksCard>,
+    /// Top-albums card resolved from an `<<<ARTIST_CARD>>>` sentinel.
+    #[serde(default)]
+    pub artist_card: Option<ArtistCard>,
     /// Set when the server returns an error JSON
     #[serde(default)]
     pub error: Option<String>,
@@ -354,6 +360,27 @@ pub struct Suggestion {
     pub artist: Option<String>,
     #[serde(default)]
     pub album: Option<String>,
+}
+
+/// Inline tracklist card for an album the assistant is discussing. Mirrors
+/// `crate::ai::AlbumTracksCard`. Resolved server-side via Roon Library search;
+/// `None` (i.e. server omits the field) when the album wasn't found.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AlbumTracksCard {
+    pub album: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub tracks: Vec<String>,
+}
+
+/// Inline top-albums card for an artist the assistant is discussing. Mirrors
+/// `crate::ai::ArtistCard`. Resolved server-side via Roon Library search.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ArtistCard {
+    pub artist: String,
+    #[serde(default)]
+    pub albums: Vec<String>,
 }
 
 pub async fn ai_chat(req: AiChatRequest) -> Result<AiChatResponse, String> {

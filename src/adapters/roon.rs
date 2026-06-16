@@ -1194,6 +1194,311 @@ impl RoonAdapter {
         ))
     }
 
+    /// Inline Library search that keeps the session open so the caller can
+    /// continue browsing into a result. `self.search()` ends its session
+    /// before returning, which means item_keys it returns can't be browsed
+    /// in a fresh session — Roon falls back to root. Use this when you need
+    /// to drill INTO a search result.
+    async fn library_search_in_session(
+        &self,
+        query: &str,
+        session_key: &str,
+    ) -> Result<Vec<BrowseItem>> {
+        // Step 1: navigate to root
+        self.browse(BrowseOpts {
+            multi_session_key: Some(session_key.to_string()),
+            pop_all: true,
+            ..Default::default()
+        })
+        .await?;
+
+        let root_items = self
+            .load(LoadOpts {
+                multi_session_key: Some(session_key.to_string()),
+                count: Some(10),
+                ..Default::default()
+            })
+            .await?;
+
+        // Step 2: enter Library
+        let library_item = root_items
+            .items
+            .iter()
+            .find(|item| item.title == "Library")
+            .ok_or_else(|| anyhow::anyhow!("Library not found in browse root"))?;
+        let library_key = library_item
+            .item_key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Library has no item_key"))?;
+
+        self.browse(BrowseOpts {
+            multi_session_key: Some(session_key.to_string()),
+            item_key: Some(library_key),
+            ..Default::default()
+        })
+        .await?;
+
+        let library_items = self
+            .load(LoadOpts {
+                multi_session_key: Some(session_key.to_string()),
+                count: Some(10),
+                ..Default::default()
+            })
+            .await?;
+
+        // Step 3: enter Search
+        let search_item = library_items
+            .items
+            .iter()
+            .find(|item| item.title == "Search")
+            .ok_or_else(|| anyhow::anyhow!("Search not found in Library"))?;
+        let search_key = search_item
+            .item_key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Search has no item_key"))?;
+
+        // Step 4: submit query
+        self.browse(BrowseOpts {
+            multi_session_key: Some(session_key.to_string()),
+            item_key: Some(search_key),
+            input: Some(query.to_string()),
+            ..Default::default()
+        })
+        .await?;
+
+        let results = self
+            .load(LoadOpts {
+                multi_session_key: Some(session_key.to_string()),
+                count: Some(20),
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(results.items)
+    }
+
+    /// Resolve an album to its tracklist via Roon Library search + browse.
+    /// Used by the AI chat surface to render an inline expandable track-list
+    /// card when Claude emits an `<<<ALBUM_TRACKS>>>` sentinel.
+    ///
+    /// Returns `Ok(vec![])` when the album isn't found in Library — caller
+    /// (the AI chat handler) treats empty as "no card, just prose". Errors
+    /// only on Roon connection / browse failures.
+    pub async fn get_album_tracks(
+        &self,
+        album: &str,
+        artist: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let query = match artist {
+            Some(a) if !a.is_empty() => format!("{} {}", a, album),
+            _ => album.to_string(),
+        };
+
+        // ONE session for search + drill-in. Roon item_keys are
+        // session-scoped — search() (the public helper) closes its session
+        // before returning, so browsing into a search-result item_key in a
+        // fresh session falls back to root. We do all navigation in-session
+        // here.
+        let session_key = format!(
+            "album_tracks_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        let results = self
+            .library_search_in_session(&query, &session_key)
+            .await?;
+
+        // Search returns category headers ("Albums", "Tracks") interleaved
+        // with content items. Find the first List-hinted item whose title
+        // looks like the album we asked for. List hint = "browse into me",
+        // which is what an album entry in search results carries.
+        let album_lower = album.to_lowercase();
+        let album_item = results.iter().find(|item| {
+            item.item_key.is_some()
+                && matches!(item.hint, Some(ItemHint::List) | None)
+                && !is_category(item)
+                && item.title.to_lowercase().contains(&album_lower)
+        });
+        let Some(album_item) = album_item else {
+            return Ok(Vec::new());
+        };
+        let album_key = match &album_item.item_key {
+            Some(k) => k.clone(),
+            None => return Ok(Vec::new()),
+        };
+
+        self.browse(BrowseOpts {
+            multi_session_key: Some(session_key.clone()),
+            item_key: Some(album_key),
+            ..Default::default()
+        })
+        .await?;
+
+        let inner = self
+            .load(LoadOpts {
+                multi_session_key: Some(session_key),
+                count: Some(50),
+                ..Default::default()
+            })
+            .await?;
+
+        // Top of an album page is action entries ("Play Album", "Add Next",
+        // "Queue", "Start Radio") with hint=ActionList. Below those are the
+        // actual tracks. Filter out the actions, headers, and category
+        // entries; what's left is the tracklist (capped to keep the UI sane).
+        const ACTION_TITLES: &[&str] = &[
+            "Play Album",
+            "Add Next",
+            "Queue",
+            "Start Radio",
+            "Library Match",
+            "TIDAL Match",
+            "Qobuz Match",
+            "Add To Library",
+            "Add to Library",
+            "More",
+        ];
+
+        let tracks: Vec<String> = inner
+            .items
+            .iter()
+            .filter(|item| {
+                !matches!(
+                    item.hint,
+                    Some(ItemHint::ActionList) | Some(ItemHint::Header) | Some(ItemHint::List)
+                ) && !ACTION_TITLES.contains(&item.title.as_str())
+                    && !is_category(item)
+                    && !item.title.is_empty()
+            })
+            .map(|item| item.title.clone())
+            .take(30)
+            .collect();
+
+        Ok(tracks)
+    }
+
+    /// Resolve an artist to their top-album titles via Roon Library search +
+    /// browse. Used by the AI chat surface to render an inline artist card
+    /// when Claude emits an `<<<ARTIST_CARD>>>` sentinel.
+    ///
+    /// Returns `Ok(vec![])` when the artist isn't in Library, or when the
+    /// browse path doesn't surface an "Albums" subnav. Caller treats empty
+    /// as "no card".
+    pub async fn get_artist_albums(&self, artist: &str) -> Result<Vec<String>> {
+        // Same session-continuity reason as `get_album_tracks` — see comment
+        // there.
+        let session_key = format!(
+            "artist_albums_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+
+        let results = self
+            .library_search_in_session(artist, &session_key)
+            .await?;
+
+        // Find the first result that looks like an artist (List-hinted, title
+        // matches the search). Library search returns category headers, then
+        // individual content items — skip headers via `is_category`.
+        let artist_lower = artist.to_lowercase();
+        let artist_item = results.iter().find(|item| {
+            item.item_key.is_some()
+                && matches!(item.hint, Some(ItemHint::List))
+                && !is_category(item)
+                && item.title.to_lowercase().contains(&artist_lower)
+        });
+        let Some(artist_item) = artist_item else {
+            return Ok(Vec::new());
+        };
+        let artist_key = match &artist_item.item_key {
+            Some(k) => k.clone(),
+            None => return Ok(Vec::new()),
+        };
+
+        // Browse into the artist page
+        self.browse(BrowseOpts {
+            multi_session_key: Some(session_key.clone()),
+            item_key: Some(artist_key),
+            ..Default::default()
+        })
+        .await?;
+
+        let artist_page = self
+            .load(LoadOpts {
+                multi_session_key: Some(session_key.clone()),
+                count: Some(30),
+                ..Default::default()
+            })
+            .await?;
+
+        // The artist page lists sub-categories ("Top Tracks", "Albums",
+        // "Singles & EPs", etc.) and then the actual albums grouped under
+        // them. If there's a dedicated "Albums" subnav, drill into it; if
+        // the page is already a flat album list, use the items directly.
+        let albums_section = artist_page
+            .items
+            .iter()
+            .find(|i| i.title == "Albums" || i.title == "Main Albums");
+
+        let album_items = if let Some(section) = albums_section {
+            let section_key = match &section.item_key {
+                Some(k) => k.clone(),
+                None => return Ok(Vec::new()),
+            };
+            self.browse(BrowseOpts {
+                multi_session_key: Some(session_key.clone()),
+                item_key: Some(section_key),
+                ..Default::default()
+            })
+            .await?;
+            self.load(LoadOpts {
+                multi_session_key: Some(session_key),
+                count: Some(20),
+                ..Default::default()
+            })
+            .await?
+            .items
+        } else {
+            artist_page.items
+        };
+
+        // Filter: skip headers, sub-category navs, and known action verbs.
+        // The remainder is the album list (List-hinted typically, since each
+        // album is browse-into-able from the artist page).
+        const SKIP_TITLES: &[&str] = &[
+            "Top Tracks",
+            "Albums",
+            "Main Albums",
+            "Singles & EPs",
+            "Compilations",
+            "Live",
+            "Appears On",
+            "Play Artist",
+            "Start Radio",
+            "Add To Library",
+            "Add to Library",
+        ];
+
+        let albums: Vec<String> = album_items
+            .iter()
+            .filter(|item| {
+                !matches!(item.hint, Some(ItemHint::Header))
+                    && !SKIP_TITLES.contains(&item.title.as_str())
+                    && !is_category(item)
+                    && !item.title.is_empty()
+            })
+            .map(|item| item.title.clone())
+            .take(8)
+            .collect();
+
+        Ok(albums)
+    }
+
     /// Execute a play action on a specific item
     async fn execute_play_action(
         &self,

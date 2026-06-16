@@ -4520,3 +4520,382 @@ Note: the existing `build/windows/installer.wxs` already wires up a similar URL 
 Same as previous "Where We Stand" — `v3.9.0` tag whenever convenient; binary-size trim is the only architectural follow-up. Nothing urgent.
 
 The 2026-05-08 scheduled agent (`trig_011yn1keYv8RsozhbSYz5LUR`) will see today's commit alongside the prior days' commits and propose the tag PR if no firefighting commits land between now and then.
+
+---
+
+## Recent Work (2026-05-04, second pass) — Binary-size trim (~49 MB)
+
+The post-v3.8.1 follow-up listed in the previous "Where We Stand": *"Binary-size trim — ~70 MB savings possible with browser-targeted ort-wasm variant selection."* Came in slightly under the optimistic prediction at 49 MB, but at a much better story than expected — turns out half the savings came from a **latent duplicate-embed bug**, not from variant selection alone.
+
+### Baseline → final
+
+| | Bytes | Human |
+|---|---|---|
+| Pre-trim | 131,618,304 | 125.5 MB |
+| Post-trim | 80,181,248 | 76.5 MB |
+| **Saved** | **51,437,056** | **~49 MB / 39%** |
+
+### Surface 1 — JSEP-only variant selection (predicted ~50 MB)
+
+`openwakeword-wasm-browser` imports `onnxruntime-web/webgpu`, whose IIFE bundle hardcodes `ort-wasm-simd-threaded.jsep.{wasm,mjs}` (verified via `grep`: the strings appear at lines 842, 2391, 10385 of the bundled `openwakeword.js`). The other three variants we'd been shipping — base, asyncify, jspi — total ~50 MB of `.wasm` and were *never reachable at runtime*. The "all 8 variants because feature detection picks one" reasoning in the original setup script was over-cautious; the bundle's import path locks in JSEP regardless.
+
+Actions:
+- Deleted from `public/wake-word/ort/`: base, asyncify, jspi pairs (.wasm + .mjs). Kept only `.jsep.{wasm,mjs}`. ort/ went 74 MB → 25 MB on disk.
+- Updated `scripts/setup-wake-word.{ps1,sh}` step 6 to filter to `*jsep*` so re-running the setup script stays trim. (Side-fix on the .sh path: was missing the .mjs loader stubs entirely — pre-existing bug, never noticed because Chris is on Windows.)
+- Also dropped leftover `models/wake_word.onnx.old` (~200 KB) from the Hey-Roon retrain swap.
+
+### Surface 2 — duplicate embed via PublicAssets (the surprise win)
+
+After the variant deletion + rebuild, the binary didn't shrink — same exact 131,618,304 bytes. Dug in and found the actual mechanic:
+
+1. `dx build` mirrors `public/wake-word/` into `target/dx/roon-ai/release/web/public/wake-word/`
+2. dx **never prunes** stale entries — the previous build's all-variants tree was still sitting there
+3. `PublicAssets` (in `src/embedded.rs`) embeds the dx output dir as-is
+
+Result: the binary was carrying *two* copies of every wake-word asset — once via `WakeWordAssets` (correctly trimmed by surface 1) and once via `PublicAssets` (still bloated, all 4 variants). Surface-1 deletion alone couldn't fix this because `PublicAssets` reads from a different folder.
+
+Fix:
+- Added `#[exclude = "wake-word/*"]` to `PublicAssets` so the dx output's wake-word/ subtree is no longer embedded. The dedicated `WakeWordAssets` struct + `/wake-word/{*path}` route are now the only path to those bytes.
+- Required enabling rust-embed's `include-exclude` feature in `Cargo.toml`.
+- One-time cleanup: `rm -rf target/dx/roon-ai/release/web/public/wake-word/` so the next dx build starts clean. Future builds copy only the JSEP pair, but the exclude attribute makes that moot.
+
+This is a generally useful pattern — `PublicAssets` was implicitly assumed to be the dx-only mirror, but `public/wake-word/` shares the same prefix and got swept in. Any future asset directory that lives directly under `public/` (not in dx-managed `assets/`) should consider whether it needs its own `PublicAssets` exclude.
+
+### Files modified
+
+- `Cargo.toml` — `rust-embed` gains the `include-exclude` feature
+- `src/embedded.rs` — `#[exclude = "wake-word/*"]` on `PublicAssets` plus a comment explaining the dual-embed trap
+- `scripts/setup-wake-word.ps1` — step 6 filters to `ort-wasm-simd-threaded.jsep.*`
+- `scripts/setup-wake-word.sh` — step 6 filters to `ort-wasm-simd-threaded.jsep.*` and now copies the `.mjs` loader stub too
+- (deleted) `public/wake-word/ort/ort-wasm-simd-threaded.{wasm,mjs,asyncify.wasm,asyncify.mjs,jspi.wasm,jspi.mjs}`
+- (deleted) `public/wake-word/models/wake_word.onnx.old`
+
+### Smoke-test status
+
+⚠️ **Not yet verified in-browser.** The build compiles clean and the dx asset-copy log shows just the JSEP pair (assets 4/16 and 15/16), but actually saying "Hey Roon" against the trimmed binary hasn't been tested at the time of writing. Pre-tag verification needed:
+
+1. Launch `target\release\roon-ai.exe`
+2. Settings → Hands-free wake word → on
+3. Say "Hey Roon" → expect STT capture to start within 1-2 s
+
+If wake-word fails to load: the most likely culprit is the `PublicAssets` exclude pattern catching something else, or the JS bundle resolving an mjs path that's no longer embedded. Revert is one Edit (remove the exclude line) + rebuild — though that re-introduces the ~25 MB duplication penalty.
+
+### What's actually next
+
+Binary-size trim was the last architectural item on the post-v3.8.1 follow-up list. After smoke-test passes, the candidate list reads:
+
+- **v3.9.0 tag** — scheduled agent on 2026-05-08 will propose; user can also tag manually
+- **Score smoothing / cooldown tuning** — only if false-positives surface
+- **Streaming-while-speaking interrupt** — easy hook on `speaking: Signal<bool>`, not requested
+- **Brainstorm item F** — auto-fetch album tracks (polish)
+- **Brainstorm item G** — mkcert local CA (multi-device LAN cert pain)
+- **Brainstorm item I** — track-love protocol RE (speculative)
+
+Item D (MQTT bridge for Home Assistant) — **dropped per user 2026-05-04**. Not running HA, no use case.
+
+---
+
+## Plan — Sentinel-Card Triad: F → Artist → TTS Interrupt (2026-05-04)
+
+After the binary-trim landed, picked up the next chunk. Goal: build the sentinel-driven inline-card infrastructure (F), reuse it for an artist card, then bolt on a TTS-interrupt button. Roughly one day end-to-end. F builds the scaffolding the next two reuse, so sequencing matters.
+
+### F — Auto-fetch album tracks [~half day, in progress]
+
+Original plan reproduced from the post-v3.7.0 playbook for self-contained scope:
+
+- New sentinel: `<<<ALBUM_TRACKS>>>{"title":"...","artist":"...","album":"..."}<<<END_ALBUM_TRACKS>>>`
+- Server parses sentinel, resolves album via Roon `albums` browse hierarchy → tracklist
+- New `album_tracks: Option<Vec<TrackInfo>>` on `AiChatResponse`
+- UI renders expandable track-list card under the assistant bubble, each track with ▶ Play
+- ▶ submits `Play "{track}" from {album} by {artist}` as new chat turn (route-through-agent pattern, per saved feedback memory)
+
+Files: `src/ai/mod.rs`, `src/api/mod.rs`, `src/app/api.rs`, `src/app/pages/conversational_ai.rs`. Roon browse can be slow for large libraries → 3 s timeout, omit card on miss rather than error.
+
+### Artist card [~2h, after F]
+
+Pattern reuse — same sentinel mechanism, different payload.
+
+- Sentinel: `<<<ARTIST_CARD>>>{"artist":"..."}<<<END_ARTIST_CARD>>>`
+- Server resolves: top 5 albums + 3 similar artists via Roon browse
+- Render below bubble: album strip with ▶ Play per album; similar-artists list, each entry submits `Tell me about {artist}` as a new turn
+
+This is mostly copy-paste-and-tweak of F's plumbing. The first sentinel-card costs the architecture; subsequent ones are cheap.
+
+### Streaming-while-speaking TTS interrupt [~30 min, after artist card]
+
+Already enabled by the `speaking: Signal<bool>` infrastructure from 2026-05-01.
+
+- ⏹ button next to the "speaking" pill on the assistant bubble (only visible when `speaking == true`)
+- Click → close active TTS session, set `speaking = false`, clear any pending audio
+- No agent-side change needed; pure client-side abort
+
+### Other ideas considered, parked (not killed)
+
+Stayed on the table during selection but didn't make this round's cut:
+
+- **Lyrics inline** — sentinel + free LRCLIB fetch. External-API dep, only useful if lyrics are wanted. ~half day.
+- **Per-message timestamps** — sub-text under each bubble. ~15 min polish if friction surfaces.
+- **Sleep timer** — new tool `set_sleep_timer(minutes)`. Useful conversational verb, ~1h.
+- **Listening history tool** — exposes Roon's history to the AI. ~2h, gated on Roon endpoint browsability.
+
+### Sequencing rationale
+
+F first because it builds the sentinel-card scaffolding the next two reuse. Artist card next because it's pure pattern reuse — best compounding return on F's investment. TTS interrupt last because it's standalone and tiny — natural cap to the day.
+
+After this triad: the conversational AI surface gains two browsable inline cards + a "stop talking" verb. Daily-use polish for the AI page is then meaningfully done; remaining items move further into the "only if friction surfaces" bucket.
+
+---
+
+## Recent Work (2026-05-04, third pass) — Sentinel-card triad shipped
+
+Built F + artist card + TTS interrupt in one pass per the plan above. All three compile clean (dx + cargo); awaiting in-browser smoke-test before tag.
+
+### F — Auto-fetch album tracks ✅
+
+End-to-end wiring landed:
+
+- **`src/ai/mod.rs`**: new `AlbumTracksCard` + `AlbumTracksRequest` types; `extract_album_tracks` mirrors `extract_suggestions`; `resolve_album_tracks` calls Roon with a 3 s timeout and gracefully returns `None` on miss.
+- **`src/adapters/roon.rs`**: new `get_album_tracks(album, artist)` does Library search → first List-hinted match → browse-into → load → filter out actions/headers → return up to 30 track titles.
+- **`src/ai/mod.rs` system prompt**: AI is instructed to emit `<<<ALBUM_TRACKS>>>{"album": "...", "artist": "..."}<<<END_ALBUM_TRACKS>>>` after the prose when the reply focuses on one specific album.
+- **`StreamEvent::Done` + `AiChatResponse`**: new `album_tracks: Option<AlbumTracksCard>` field on both, threaded through the SSE pipe.
+- **Client (`src/app/api.rs` + `src/app/pages/conversational_ai.rs`)**: `AlbumTracksCard` mirrored, added to `ChatMessage` and `AgentEvent::Done`. Renders as an expandable `<details open>` card under the assistant bubble — header shows "💿 {album} — {artist}", each row shows "1. Track Name" with a ▶ button. Click submits `Play "{track}" from "{album}" by {artist}` as a new chat turn (route-through-agent per saved feedback).
+
+### Artist card ✅
+
+Pattern reuse. Files: same as F, just different sentinel + payload.
+
+- **Sentinel**: `<<<ARTIST_CARD>>>{"artist": "..."}<<<END_ARTIST_CARD>>>`
+- **Roon resolver**: `get_artist_albums(artist)` searches Library, finds the artist (List-hinted match), browses in, optionally drills into "Albums" sub-section if present, returns up to 8 album titles. Filters out the usual category/action noise.
+- **UI**: same `<details>` card shape as F. Header: "🎤 {artist}". Each row: ▶ + album title. ▶ submits `Play "{album}" by {artist}` as a new chat turn.
+
+The earliest-sentinel cutoff helper now scans for `[SUGGESTIONS, ALBUM_TRACKS, ARTIST_CARD]` and uses the min — that's what gates streaming text suppression and tool-pill placement. Single function, all three paths.
+
+### Streaming-while-speaking interrupt ✅
+
+Tiny addition since `speaking: Signal<bool>` already existed (from 2026-05-01 wake-word work):
+
+- Input row gets a new ⏹ button between the 🎤 mic and Send, visible *only* while `speaking == true`.
+- Click → `RoonSpeech.cancelSpeech()` (already exposed) + local `speaking.set(false)` so the wake-word listener resumes promptly even before the JS audio queue finishes draining.
+- Amber colour (`bg-amber-600`) so it doesn't visually clash with the red ■ "stop listening" mic state.
+
+### Files modified (this pass)
+
+- `src/ai/mod.rs` — three new types, two new sentinel extractors, two Roon resolvers, expanded system prompt, `earliest_sentinel_pos` extended to three markers, both agent paths now thread `album_tracks` + `artist_card` through.
+- `src/adapters/roon.rs` — `get_album_tracks` and `get_artist_albums` (~120 lines together).
+- `src/app/api.rs` — `AlbumTracksCard` + `ArtistCard` mirror types; new fields on `AiChatResponse`.
+- `src/app/pages/conversational_ai.rs` — imports updated; `ChatMessage` + `AgentEvent::Done` carry the new fields; two new render blocks (album-tracks, artist-card); ⏹ TTS-interrupt button on input row.
+
+### Binary size delta
+
+- After binary trim (this morning, F-less): 76.5 MB
+- After this triad: **79.0 MB** (+2.5 MB from new code — sentinel parsers, two Roon helpers, expanded system prompt, two new UI render blocks)
+- vs original pre-trim baseline: 125.5 MB → 79.0 MB = still **46.5 MB net savings** today
+
+### Smoke-test plan (still required before tag)
+
+1. **F** — Ask "Tell me about Aja by Steely Dan" (or any library album). Expect prose + 💿 expandable card with track list. Click ▶ on track 3 → expect "Play 'Track 3' from 'Aja' by Steely Dan" submitted as new turn → Roon plays it.
+2. **Artist card** — Ask "Who's Steely Dan?" or "Tell me about [artist]". Expect prose + 🎤 expandable card with their albums. Click ▶ on an album → submits play as new turn.
+3. **TTS interrupt** — Ask anything that produces a long reply with Speak on. While the AI is still speaking, click the new ⏹ button. Expect audio to stop immediately, button to disappear, wake-word to resume listening.
+4. **Negative cases** — Ask something that doesn't focus on an album/artist (e.g. "what time is it?"). Expect no card. Ask about an album not in Library. Expect prose only (no card, since `resolve_album_tracks` returns `None` on miss).
+
+If any of (1) or (2) miss-resolves the album/artist, the most likely cause is the title-match heuristic in the Roon helpers — `to_lowercase().contains(...)` may need refinement. Easy iteration: log the search results and adjust the filter predicate.
+
+### What's actually next
+
+Genuinely settling in territory now. The remaining post-v3.9.0 follow-ups are all opportunistic:
+
+- **v3.9.0 tag** — recommend tagging once the smoke tests above pass.
+- **Lyrics inline** — parked, ~half day if it surfaces as wanted.
+- **Per-message timestamps** — 15 min polish, only if it surfaces.
+- **Sleep timer** — new conversational verb, ~1h.
+- **Listening history tool** — ~2h, gated on Roon endpoint browsability.
+- **Score smoothing / cooldown tuning** — only if Hey Roon false-fires.
+- **Brainstorm items G** (mkcert) and **I** (track-love RE) — situational.
+
+---
+
+## Where We Stand — Start of 2026-05-05
+
+Yesterday's session was unusually big — three distinct chunks of work in sequence:
+
+1. **Binary-size trim** (~49 MB savings). Code-complete; not yet smoke-tested.
+2. **Sentinel-card triad** — F (album tracks), artist card, TTS interrupt. Code-complete; not yet smoke-tested.
+3. **HANDOFF.md** — three new sections covering the above plus the dropped MQTT/HA item.
+
+**Nothing has been committed yet.** All four logical changes are sitting in the working tree as a single uncommitted diff spanning 11 files (10 source + HANDOFF). This is intentional — the user wanted to smoke-test before stamping anything.
+
+### Uncommitted files (`git status` snapshot)
+
+```
+M Cargo.lock                 (rust-embed feature flag bump)
+M Cargo.toml                 (rust-embed include-exclude feature)
+M HANDOFF.md                 (binary trim + plan + triad + this entry)
+M scripts/setup-wake-word.ps1 (JSEP-only filter)
+M scripts/setup-wake-word.sh  (JSEP-only filter + .mjs side-fix)
+M src/adapters/roon.rs        (get_album_tracks + get_artist_albums)
+M src/ai/mod.rs               (sentinel parsers, resolvers, types, system prompt)
+M src/app/api.rs              (AlbumTracksCard + ArtistCard mirrors)
+M src/app/pages/conversational_ai.rs (ChatMessage fields, render blocks, ⏹ button)
+M src/embedded.rs             (PublicAssets exclude wake-word/*)
+M .wm/dive_context.md         (auto, not part of feature work)
+```
+
+Plus: deleted (untracked because they were tracked-and-removed):
+- `public/wake-word/ort/ort-wasm-simd-threaded.{wasm,mjs,asyncify.wasm,asyncify.mjs,jspi.wasm,jspi.mjs}`
+- `public/wake-word/models/wake_word.onnx.old`
+
+### Open work, ranked by what blocks v3.9.0
+
+1. **Smoke-test the binary trim** — wake-word still detects "Hey Roon" with the JSEP-only ort runtime. Should take 30 seconds.
+2. **Smoke-test the triad** — see "Smoke-test plan" in the third-pass section above. ~5 minutes covering F, artist card, TTS interrupt, and a negative case.
+3. **Commit decision** — one big commit, or split into 4 (trim / F / artist / TTS-interrupt)? Both are defensible. The trim is logically separate from the triad, so 2 commits would be the natural compromise: one for trim, one for the triad.
+4. **v3.9.0 tag** — once smoke-tests pass and commits land. Scheduled agent on 2026-05-08 (`trig_011yn1keYv8RsozhbSYz5LUR`) will see all of yesterday's work and propose the tag PR if no firefighting commits land between now and then.
+
+### Open work, post-tag (no urgency)
+
+Inheriting from prior entries — none of these are blocking:
+
+- **Lyrics inline** — sentinel + LRCLIB. Reuses the F infrastructure. ~half day.
+- **Per-message timestamps** — ~15 min polish.
+- **Sleep timer** — new `set_sleep_timer(minutes)` tool. ~1h.
+- **Listening history tool** — exposes Roon's history to the AI. ~2h.
+- **Score smoothing / cooldown tuning** — only if Hey Roon false-fires.
+- **G — mkcert local CA** — only if multi-device LAN cert pain.
+- **I — Track-love** — speculative, needs Roon WS protocol RE.
+
+Item D (HA/MQTT) — **dropped 2026-05-04**.
+
+### Honest assessment
+
+The conversational AI surface is now meaningfully complete: voice in/out, streaming TTS, history awareness, ✨ Similar, replay, album popup, auto-titles, media keys, time presets, sidebar, ℹ️ song-info, wake word, **album tracklist card, artist albums card, ⏹ stop-talking**. The cards in particular fill the last "the AI mentioned a thing — now what?" gap.
+
+If smoke-tests pass cleanly, this should be a quiet stretch. The "only if friction surfaces" framing is doing more work each session — most of the candidate items now sit there as ideas, not pending tasks.
+
+---
+
+## Recent Work (2026-05-05) — Voice feedback-loop fix + sidebar Clear button
+
+Real-usage smoke-test surfaced one real bug and one missing affordance.
+
+### The feedback loop — "the AI responding to itself"
+
+**Symptom**: User says "Hey Roon, tell me about Steely Dan". AI replies. While TTS is still reading the reply aloud, *new chat turns appear in the conversation* — gibberish-looking ones, transcribed from the AI's own voice. User: "the mic is still open and it hears itself and starts to respond to itself."
+
+**Root cause**: `start_listening_task` ([conversational_ai.rs:533](src/app/pages/conversational_ai.rs#L533)) gated re-entry on `listening || loading` but **NOT on `speaking`**. The flow that broke:
+
+1. User says "Hey Roon, …" → wake-word fires, STT opens, captures phrase, submits.
+2. AI streams reply → `loading` flips false when text streaming ends.
+3. **TTS audio still playing** → `speaking == true`, but `loading == false` and `listening == false`.
+4. The `speaking` signal *is* supposed to keep wake-word paused via the use_effect at [conversational_ai.rs:1209](src/app/pages/conversational_ai.rs#L1209).
+5. But the pause is dispatched via async eval — by the time `RoonWake.pause()` actually runs there's a small window. Also, with acoustic feedback (TTS bleeding into mic) or a low confidence threshold, wake-word can still fire.
+6. When wake-word fires during that window, it triggers `start_listening_task` → STT opens → captures TTS audio → submits as a "user turn" → AI replies again → loop.
+
+The 2026-05-01 wake-word work *did* try to prevent this via the `speaking: Signal<bool>`, and it works in the happy path. But the gating in `start_listening_task` was the missing belt to the suspenders.
+
+**Fix — three changes, defense-in-depth:**
+
+1. **`start_listening_task` now also gates on `speaking`** ([conversational_ai.rs:533](src/app/pages/conversational_ai.rs#L533)). Even if wake-word somehow fires while TTS is playing, STT will refuse to open. This is the actual fix.
+2. **STT `onresult` now calls `r.abort()` immediately** ([conversational_ai.rs:753](src/app/pages/conversational_ai.rs#L753)). With `continuous = false` the recognizer is supposed to auto-close after the first phrase, but some browsers wait for a silence period. If TTS started before that silence arrived, the recognizer would capture TTS audio as part of a longer "phrase". Forcing abort the moment we have a result eliminates that window.
+3. **JS-side TTS sentinel suppression now covers all three sentinels** ([conversational_ai.rs:402](src/app/pages/conversational_ai.rs#L402)). The 2026-05-04 triad added `<<<ALBUM_TRACKS>>>` and `<<<ARTIST_CARD>>>`, but the streaming-TTS code only knew about `<<<SUGGESTIONS>>>` — so during the streaming-cutoff race window, TTS could speak partial sentinel JSON aloud (compounding the loop's input).
+
+The first fix is the actual solve; the other two are defense.
+
+### Sidebar Clear button
+
+User asked for a "clear conversation history" button. There was already:
+
+- A Clear/Delete button in the **mobile/narrow-screen** header ([conversational_ai.rs:1731](src/app/pages/conversational_ai.rs#L1731)) — but `lg:hidden`, so invisible on desktop.
+- A 🗑 per-row in the **desktop sidebar** — but that *deletes* the conversation entirely, not "clear messages and keep entry".
+
+Added a **Clear** button next to `+ New` in the desktop sidebar header ([conversational_ai.rs:2089](src/app/pages/conversational_ai.rs#L2089)). Wipes the current conversation's messages, resets its title to "New chat" (so auto-title can fire on the next exchange), keeps the entry. Disabled while the conversation is empty. Per-conversation deletion via 🗑 still works the same.
+
+### Files modified (this pass)
+
+- `src/app/pages/conversational_ai.rs` — three feedback-loop fixes + sidebar Clear button.
+
+### Build status
+
+Standalone binary at [target/release/roon-ai.exe](target/release/roon-ai.exe) rebuilt twice today (after each fix). Currently **84.4 MB**. Running.
+
+### Where this leaves us
+
+The conversational AI surface is genuinely settling in. Wake-word + TTS + STT + cards + Clear all coexist now without feedback loops. Three sessions in a row where the friction surfaced was minor and addressable in <1 hour each:
+
+- 2026-05-04: triad (cards + ⏹) — features
+- 2026-05-04 also: binary trim — tech debt
+- 2026-05-05: loop fix + Clear — real-usage polish
+
+**Still uncommitted.** The diff has grown substantially since the start of yesterday — now spans the binary trim, the triad, the loop fix, AND the Clear button. Worth landing soon (suggested: two commits — trim separate from the conversational-AI feature work).
+
+### Open work
+
+Same as before. v3.9.0 tag still pending. Post-tag list (lyrics, timestamps, sleep timer, listening history, mkcert, track-love) all unchanged. The list of things "ready to ship if user asks" has gotten meaningfully larger; the list of things "blocking" has gotten meaningfully shorter.
+
+---
+
+## Recent Work (2026-05-05, evening) — Session-scoping bug in inline cards
+
+Real-usage smoke-test of the artist card surfaced a Roon API gotcha I'd missed. User asked "tell me about Steely Dan" — got a great prose reply, then the card rendered with **Library / Playlists / My Live Radio / Qobuz / Settings** instead of actual Steely Dan albums. Those are Roon's *root browse menu*, not artist albums.
+
+### Root cause — Roon item_keys are session-scoped
+
+The pattern I'd written:
+
+1. Call public `self.search()` helper. It generates an internal session_key, navigates Library → Search → submits query → returns items. Session implicitly closes when the function returns.
+2. Pick the artist item from results, grab its `item_key`.
+3. Open a **fresh session_key**, call `self.browse(item_key=...)` to drill into the artist page.
+
+Step 3 was the bug. Roon item_keys are valid only within the session that minted them. With a fresh session, Roon doesn't recognize the key and falls back to root. The subsequent load returned the root browse menu, which my filter (`!is_category && !SKIP_TITLES.contains(...)`) then dutifully presented as "albums".
+
+Same shape of bug existed in `get_album_tracks` — same fix.
+
+### Fix — `library_search_in_session` helper
+
+Extracted a private `library_search_in_session(query, session_key) -> Vec<BrowseItem>` on `RoonAdapter` that performs the search-navigation steps **using the caller's session_key**. Both `get_album_tracks` and `get_artist_albums` now:
+
+1. Generate a session_key once.
+2. Call `library_search_in_session(query, &session_key)` — search results returned in-session.
+3. Drill into a result's `item_key` via `browse()` — same session, key is valid.
+4. Load the artist/album page → real items.
+
+Tested by user with "tell me about Steely Dan" — confirmed the artist card now shows actual albums. Album card uses the same machinery and is presumed fixed too (test pending as of 2026-05-07).
+
+### Files modified
+
+- `src/adapters/roon.rs` — added private `library_search_in_session` helper; rewrote `get_album_tracks` and `get_artist_albums` to use it. Net ~80 lines added (the new helper); ~20 lines removed (deleted the broken pattern).
+
+### Lesson worth keeping
+
+When integrating with Roon (or any browse-API service): if you hand a key from one session to another session, expect a silent fallback to root, not an error. Be deliberate about session lifetime — keep all related navigation under one `multi_session_key`.
+
+This pattern likely applies to any future card sentinel that drills into Roon (e.g. genre browsing, tag listings) — they should mirror the in-session pattern from the start.
+
+---
+
+## Where We Stand — 2026-05-07
+
+User came back after a brief gap, confirmed the artist card works ("nice works"). Album card test still pending in real usage but uses the same now-fixed plumbing. Everything from yesterday's run is in the running binary at [target/release/roon-ai.exe](target/release/roon-ai.exe).
+
+### Still uncommitted
+
+The diff has now grown across:
+- Binary trim (2026-05-04 morning)
+- Triad: F + artist card + ⏹ TTS interrupt (2026-05-04 afternoon)
+- Voice feedback-loop fix (2026-05-05)
+- Sidebar Clear button (2026-05-05)
+- Session-scoping fix (2026-05-05 evening)
+
+Suggested commit split is now:
+
+1. `perf: trim wake-word assets — 125.5 MB → 76.5 MB binary` — surgical, isolated.
+2. `feat: AI inline cards (album/artist) + TTS interrupt + voice loop fix + sidebar Clear + session-scoping fix` — the conversational-AI feature work, all in service of the v3.9.0 surface.
+
+Alternatively, one big "v3.9.0 prep" commit if you'd rather not split. Either is defensible.
+
+### Open work
+
+- **Smoke-test the album card** ("tell me about Aja by Steely Dan") — should work now post-session-scoping fix. <1 min.
+- **Commit decision** — 1 commit or 2 commits.
+- **v3.9.0 tag** — once committed.
+
+Post-tag list (lyrics, per-message timestamps, sleep timer, listening history, mkcert, track-love) unchanged.

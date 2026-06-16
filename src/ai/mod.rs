@@ -74,6 +74,14 @@ pub struct AiChatResponse {
     pub actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<Suggestion>,
+    /// Track-list card resolved from a `<<<ALBUM_TRACKS>>>` sentinel. None when
+    /// the AI didn't request one or Roon couldn't resolve the album.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_tracks: Option<AlbumTracksCard>,
+    /// Top-albums card resolved from an `<<<ARTIST_CARD>>>` sentinel. None when
+    /// the AI didn't request one or Roon couldn't resolve the artist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_card: Option<ArtistCard>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +91,48 @@ pub struct Suggestion {
     pub artist: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub album: Option<String>,
+}
+
+/// Resolved tracklist for a single album, sent inline alongside an assistant
+/// reply. The AI opts in by emitting an `<<<ALBUM_TRACKS>>>` sentinel; the
+/// server resolves the request via Roon's browse hierarchy. If resolution
+/// fails (album not in library, search times out, etc.) this stays `None` on
+/// the response and the user sees only the prose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumTracksCard {
+    pub album: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    pub tracks: Vec<String>,
+}
+
+/// Sentinel payload — the AI emits this between `<<<ALBUM_TRACKS>>>` markers.
+#[derive(Debug, Deserialize)]
+struct AlbumTracksRequest {
+    #[serde(default)]
+    album: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// Top-level inline card for an artist the AI is discussing. Resolved from an
+/// `<<<ARTIST_CARD>>>` sentinel; contains the artist's top albums from Roon
+/// Library. Tracks are not eagerly fetched (the user can drill into a specific
+/// album by submitting "tell me about {album}" which then gets the full
+/// `<<<ALBUM_TRACKS>>>` treatment).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistCard {
+    pub artist: String,
+    pub albums: Vec<String>,
+}
+
+/// Sentinel payload — the AI emits this between `<<<ARTIST_CARD>>>` markers.
+#[derive(Debug, Deserialize)]
+struct ArtistCardRequest {
+    #[serde(default)]
+    artist: Option<String>,
 }
 
 // ============================================================================
@@ -500,7 +550,19 @@ on its own lines, after a blank line:\n\n\
 [{{\"title\": \"Piece or track title\", \"artist\": \"Composer or performer\", \"album\": \"Album (optional)\"}}]\n\
 <<<END_SUGGESTIONS>>>\n\n\
 Rules for the block: valid JSON array only; include between 1 and 10 items; omit the block entirely if you are not recommending specific pieces. \
-Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed.{}{}{}",
+Do not mention the block in the prose. Use it only for recommendations the user could act on — not for confirming a play you just executed. \
+\n\nWhen your reply discusses ONE specific album in depth and the user might want to browse its tracklist, append a second machine-readable block in this exact format, on its own lines, after a blank line:\n\n\
+<<<ALBUM_TRACKS>>>\n\
+{{\"album\": \"Album title\", \"artist\": \"Album artist\"}}\n\
+<<<END_ALBUM_TRACKS>>>\n\n\
+Rules for this block: valid JSON object only; emit at most ONE per reply (only the most prominent album you're discussing); omit entirely if you are not focused on one specific album, or if you're only mentioning an album in passing, or if you just confirmed a play. \
+Do not mention this block in the prose. The system will resolve the tracklist via the music library and surface it to the user as an inline expandable card with per-track Play buttons. \
+\n\nWhen your reply focuses on ONE specific artist (their career, body of work, where to start) and the user might want to browse the artist's albums, append a third machine-readable block in this exact format, on its own lines, after a blank line:\n\n\
+<<<ARTIST_CARD>>>\n\
+{{\"artist\": \"Artist name\"}}\n\
+<<<END_ARTIST_CARD>>>\n\n\
+Rules for this block: valid JSON object only; emit at most ONE per reply; omit entirely if you are not focused on one specific artist, or if you're only mentioning the artist in passing, or if your reply is already focused on a specific album (use ALBUM_TRACKS instead in that case). \
+Do not mention this block in the prose. The system will resolve the artist's albums via the music library and surface them as an inline expandable card with per-album Play buttons.{}{}{}",
         zone_hint,
         track_hint,
         history_hint
@@ -956,12 +1018,25 @@ pub async fn run_agent(request: AiChatRequest, state: &AppState) -> Result<AiCha
     }
 
     let (clean_text, suggestions) = extract_suggestions(&final_text);
+    let (clean_text, album_tracks_req) = extract_album_tracks(&clean_text);
+    let (clean_text, artist_card_req) = extract_artist_card(&clean_text);
+
+    let album_tracks = match album_tracks_req {
+        Some(req) => resolve_album_tracks(&state, &req).await,
+        None => None,
+    };
+    let artist_card = match artist_card_req {
+        Some(req) => resolve_artist_card(&state, &req).await,
+        None => None,
+    };
 
     Ok(AiChatResponse {
         response: markdown_to_html(&clean_text),
         response_markdown: clean_text,
         actions,
         suggestions,
+        album_tracks,
+        artist_card,
     })
 }
 
@@ -983,6 +1058,10 @@ pub enum StreamEvent {
         response: String,
         response_markdown: String,
         suggestions: Vec<Suggestion>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        album_tracks: Option<AlbumTracksCard>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artist_card: Option<ArtistCard>,
     },
     /// Fatal error. The client should display this and stop the stream.
     Error { message: String },
@@ -1040,9 +1119,10 @@ async fn run_agent_streaming_inner(
     });
 
     let mut full_text = String::new();
-    // Once Claude writes the suggestions sentinel, we stop forwarding text to
-    // the client (the JSON inside the block isn't user-visible content).
-    let mut suggestions_emitted = false;
+    // Once Claude writes any sentinel marker (SUGGESTIONS or ALBUM_TRACKS), we
+    // stop forwarding text to the client — the JSON inside sentinel blocks
+    // isn't user-visible content. Whichever marker appears first wins.
+    let mut sentinel_seen = false;
     // Records (byte_offset_in_full_text, summary) for each tool call as it
     // fires. After the loop, we splice these into a parallel "marked text"
     // buffer (with Private-Use-Area sentinel markers) which then goes through
@@ -1058,12 +1138,12 @@ async fn run_agent_streaming_inner(
             let prev_len = full_text.len();
             full_text.push_str(delta);
 
-            if suggestions_emitted {
+            if sentinel_seen {
                 return;
             }
 
-            if let Some(marker_pos) = full_text.find("<<<SUGGESTIONS>>>") {
-                suggestions_emitted = true;
+            if let Some(marker_pos) = earliest_sentinel_pos(&full_text) {
+                sentinel_seen = true;
                 if marker_pos > prev_len {
                     let bytes_in_delta = marker_pos - prev_len;
                     // Snap to a UTF-8 char boundary to avoid splitting a codepoint.
@@ -1130,18 +1210,34 @@ async fn run_agent_streaming_inner(
         full_text = "Done.".to_string();
     }
 
+    // Strip all sentinels — order doesn't matter, each looks for its own
+    // markers independently. Card resolutions are Roon round-trips so they
+    // happen after the text is already finalised.
     let (clean_text, suggestions) = extract_suggestions(&full_text);
+    let (clean_text, album_tracks_req) = extract_album_tracks(&clean_text);
+    let (clean_text, artist_card_req) = extract_artist_card(&clean_text);
 
     // Build the marked source by splicing tool sentinels into clean_text at the
     // recorded byte offsets, dropping any tools that landed inside (or after)
-    // the suggestions block.
-    let suggestions_cutoff = full_text.find("<<<SUGGESTIONS>>>").unwrap_or(full_text.len());
-    let response_html = render_with_pills(&clean_text, &tool_positions, suggestions_cutoff);
+    // any sentinel block. Use the earliest sentinel as the cutoff.
+    let sentinel_cutoff = earliest_sentinel_pos(&full_text).unwrap_or(full_text.len());
+    let response_html = render_with_pills(&clean_text, &tool_positions, sentinel_cutoff);
+
+    let album_tracks = match album_tracks_req {
+        Some(req) => resolve_album_tracks(&state, &req).await,
+        None => None,
+    };
+    let artist_card = match artist_card_req {
+        Some(req) => resolve_artist_card(&state, &req).await,
+        None => None,
+    };
 
     let _ = tx.send(StreamEvent::Done {
         response: response_html,
         response_markdown: clean_text,
         suggestions,
+        album_tracks,
+        artist_card,
     });
 
     Ok(())
@@ -1255,6 +1351,160 @@ fn extract_suggestions(text: &str) -> (String, Vec<Suggestion>) {
     cleaned.push_str(&text[after_end..]);
 
     (cleaned.trim().to_string(), suggestions)
+}
+
+const ALBUM_TRACKS_START: &str = "<<<ALBUM_TRACKS>>>";
+const ALBUM_TRACKS_END: &str = "<<<END_ALBUM_TRACKS>>>";
+const ARTIST_CARD_START: &str = "<<<ARTIST_CARD>>>";
+const ARTIST_CARD_END: &str = "<<<END_ARTIST_CARD>>>";
+const SUGGESTIONS_START: &str = "<<<SUGGESTIONS>>>";
+
+/// Extract an `<<<ALBUM_TRACKS>>> ... <<<END_ALBUM_TRACKS>>>` block, parse the
+/// JSON request inside, and return the text with the block removed. Mirrors
+/// `extract_suggestions`. Silently drops the block on parse failure so the
+/// user still sees the prose.
+fn extract_album_tracks(text: &str) -> (String, Option<AlbumTracksRequest>) {
+    let Some(start_idx) = text.find(ALBUM_TRACKS_START) else {
+        return (text.to_string(), None);
+    };
+    let after_start = start_idx + ALBUM_TRACKS_START.len();
+    let Some(end_rel) = text[after_start..].find(ALBUM_TRACKS_END) else {
+        return (text.to_string(), None);
+    };
+    let end_idx = after_start + end_rel;
+    let after_end = end_idx + ALBUM_TRACKS_END.len();
+
+    let json_slice = text[after_start..end_idx].trim();
+    let req: Option<AlbumTracksRequest> = serde_json::from_str(json_slice).ok();
+
+    let mut cleaned = String::with_capacity(text.len());
+    cleaned.push_str(&text[..start_idx]);
+    cleaned.push_str(&text[after_end..]);
+
+    (cleaned.trim().to_string(), req)
+}
+
+/// Earliest byte offset in `text` of any sentinel marker (SUGGESTIONS,
+/// ALBUM_TRACKS, ARTIST_CARD). Used by the streaming flow to know where to
+/// stop forwarding raw deltas to the client (the JSON inside sentinel blocks
+/// isn't visible content) and where to truncate `tool_positions` when
+/// splicing pills.
+fn earliest_sentinel_pos(text: &str) -> Option<usize> {
+    [
+        text.find(SUGGESTIONS_START),
+        text.find(ALBUM_TRACKS_START),
+        text.find(ARTIST_CARD_START),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+/// Extract an `<<<ARTIST_CARD>>> ... <<<END_ARTIST_CARD>>>` block. Mirrors
+/// `extract_album_tracks` — same shape, different markers.
+fn extract_artist_card(text: &str) -> (String, Option<ArtistCardRequest>) {
+    let Some(start_idx) = text.find(ARTIST_CARD_START) else {
+        return (text.to_string(), None);
+    };
+    let after_start = start_idx + ARTIST_CARD_START.len();
+    let Some(end_rel) = text[after_start..].find(ARTIST_CARD_END) else {
+        return (text.to_string(), None);
+    };
+    let end_idx = after_start + end_rel;
+    let after_end = end_idx + ARTIST_CARD_END.len();
+
+    let json_slice = text[after_start..end_idx].trim();
+    let req: Option<ArtistCardRequest> = serde_json::from_str(json_slice).ok();
+
+    let mut cleaned = String::with_capacity(text.len());
+    cleaned.push_str(&text[..start_idx]);
+    cleaned.push_str(&text[after_end..]);
+
+    (cleaned.trim().to_string(), req)
+}
+
+/// Resolve an `ArtistCardRequest` into a top-albums list via Roon. Same
+/// timeout / graceful-fail pattern as `resolve_album_tracks`.
+async fn resolve_artist_card(
+    state: &AppState,
+    req: &ArtistCardRequest,
+) -> Option<ArtistCard> {
+    let artist = req.artist.as_deref()?.trim();
+    if artist.is_empty() {
+        return None;
+    }
+
+    let artist_owned = artist.to_string();
+    let roon = state.roon.clone();
+    let fut = async move { roon.get_artist_albums(&artist_owned).await };
+
+    let albums = match tokio::time::timeout(std::time::Duration::from_secs(3), fut).await {
+        Ok(Ok(a)) if !a.is_empty() => a,
+        Ok(Ok(_)) => {
+            tracing::debug!("ARTIST_CARD: '{}' resolved with empty album list", artist);
+            return None;
+        }
+        Ok(Err(e)) => {
+            tracing::debug!("ARTIST_CARD: '{}' resolution failed: {}", artist, e);
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!("ARTIST_CARD: '{}' resolution timed out (3s)", artist);
+            return None;
+        }
+    };
+
+    Some(ArtistCard {
+        artist: artist.to_string(),
+        albums,
+    })
+}
+
+/// Resolve an `AlbumTracksRequest` into an actual tracklist via Roon. Wrapped
+/// in a 3-second timeout because Roon browse against large libraries (or no
+/// match in the chosen source) can otherwise hang the request. Returns `None`
+/// on any error or timeout — the assistant reply still ships, just without
+/// the inline card.
+async fn resolve_album_tracks(
+    state: &AppState,
+    req: &AlbumTracksRequest,
+) -> Option<AlbumTracksCard> {
+    let album = req.album.as_deref().or(req.title.as_deref())?.trim();
+    if album.is_empty() {
+        return None;
+    }
+    let artist = req.artist.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
+
+    let album_owned = album.to_string();
+    let artist_owned = artist.map(|s| s.to_string());
+
+    let roon = state.roon.clone();
+    let fut = async move {
+        roon.get_album_tracks(&album_owned, artist_owned.as_deref())
+            .await
+    };
+
+    let tracks = match tokio::time::timeout(std::time::Duration::from_secs(3), fut).await {
+        Ok(Ok(t)) if !t.is_empty() => t,
+        Ok(Ok(_)) => {
+            tracing::debug!("ALBUM_TRACKS: '{}' resolved with empty tracklist", album);
+            return None;
+        }
+        Ok(Err(e)) => {
+            tracing::debug!("ALBUM_TRACKS: '{}' resolution failed: {}", album, e);
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!("ALBUM_TRACKS: '{}' resolution timed out (3s)", album);
+            return None;
+        }
+    };
+
+    Some(AlbumTracksCard {
+        album: album.to_string(),
+        artist: artist.map(|s| s.to_string()),
+        tracks,
+    })
 }
 
 fn markdown_to_html(text: &str) -> String {
