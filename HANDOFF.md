@@ -4899,3 +4899,75 @@ Alternatively, one big "v3.9.0 prep" commit if you'd rather not split. Either is
 - **v3.9.0 tag** — once committed.
 
 Post-tag list (lyrics, per-message timestamps, sleep timer, listening history, mkcert, track-love) unchanged.
+
+---
+
+## Committed — 2026-05-07
+
+The uncommitted diff landed as two commits on `v3`, split as recommended:
+
+| Hash | Subject | Files |
+|---|---|---|
+| `42fd62b` | `perf: trim wake-word assets — 125.5 MB → 76.5 MB binary` | 5 files (Cargo.toml, Cargo.lock, both setup-wake-word scripts, src/embedded.rs) |
+| `2c297fa` | `feat: AI inline cards + ⏹ TTS interrupt + voice loop fix + sidebar Clear` | 5 files (src/adapters/roon.rs, src/ai/mod.rs, src/app/api.rs, src/app/pages/conversational_ai.rs, HANDOFF.md) |
+
+Working tree now clean except for `.wm/dive_context.md` (unrelated tooling drift — one line, an old GitHub URL rewrite — left alone).
+
+Both commits are local on branch `v3`. Not pushed yet.
+
+### v3.9.0 tag
+
+Ready when you are. Options:
+
+- **Manual tag**: `git tag -a v3.9.0 -m "..."` locally, then `git push cfogarty v3 && git push cfogarty v3.9.0`.
+- **Wait for the scheduled agent** (`trig_011yn1keYv8RsozhbSYz5LUR`) firing 2026-05-08 — it will see today's two commits alongside the prior days' work and propose the tag PR.
+
+Either is fine. The scheduled path is one less thing to think about; the manual path is instant.
+
+### Album card smoke-test still open
+
+Not a blocker for the tag itself — the artist card was confirmed working ("nice works"), and the album card uses the identical `library_search_in_session` machinery. But worth a quick check with e.g. "tell me about Aja by Steely Dan" to confirm the 💿 card renders a real tracklist (Black Cow, Aja, Deacon Blues, etc.).
+
+### What's actually next
+
+Genuinely settle-in territory. The remaining candidate items — lyrics inline, per-message timestamps, sleep timer, listening history tool, mkcert, track-love — are all opportunistic. Nothing is blocked or pending. Real-usage friction is the only signal that should drive the next pick.
+
+---
+
+## Recent Work (post-v3.9.0) — Sleep timer + ✨ Similar per row
+
+Two additions immediately after tagging v3.9.0. User asked for both explicitly: "let us do sleep timer and how about a button next to each piece of music a button to suggest more like this?"
+
+### Sleep timer
+
+- New `set_sleep_timer(minutes, zone_id)` tool. AI reaches for it on prompts like "stop the music in 30 minutes", "pause after 15 min", "cancel the sleep timer". `minutes=0` cancels a pending timer.
+- Server state: one `Arc<Mutex<Option<JoinHandle<()>>>>` on `AppState`. Setting a new timer aborts the old one — at most one pending at a time. Fire path: `tokio::time::sleep(duration).await` then `roon.control(zone, "pause")`. Duration capped at 24 h so a fat-fingered `999999` doesn't stick a task in the runtime forever.
+- **UI: "💤 Sleep in: 30m / 60m / 90m / 2h / ✕" preset row** above the chat input, in the same style as the existing time-aware presets. Each preset submits the corresponding chat turn (route-through-agent, matching the ▶ Play and ✨ Similar pattern). ✕ submits "Cancel the sleep timer".
+
+### ✨ Similar per row
+
+Extended the ✨ Similar button (which existed only on the now-playing banner since v3.7.0) to every card row:
+
+- **Suggestions rows** (assistant-bubble recommendations)
+- **💿 Album-tracks card** — one ✨ per track
+- **🎤 Artist-albums card** — one ✨ per album
+
+Click submits `"Play something similar to X"` as a new chat turn. Semantic split: for a track row, similar seeds from the *track* (more granular); for an album row, from the *album*. AI typically picks `play_music` with `action='radio'` → Roon Radio takes over.
+
+Added a `similar_message_for(&Suggestion)` helper alongside the existing `play_message_for` for the suggestion-row case. Track and album rows compose the message inline (they carry different context than a Suggestion).
+
+### Files modified
+
+- `src/api/mod.rs` — `sleep_timer: Arc<Mutex<Option<JoinHandle<()>>>>` field on `AppState`; initialised to `None`; `use std::sync::Mutex` added.
+- `src/ai/mod.rs` — `set_sleep_timer` tool definition (~15 lines); `execute_tool` branch (~50 lines) that aborts any pending timer, spawns a new one, and stores the handle. Graceful cancel via `minutes<=0`. Handles poisoned-mutex the same way as the surrounding code.
+- `src/app/pages/conversational_ai.rs` — `similar_message_for` helper; three ✨ button additions (suggestions / album-tracks / artist-card); sleep-timer preset row.
+
+### Build status
+
+Binary at [target/release/roon-ai.exe](target/release/roon-ai.exe) is **83.9 MB**. Running.
+
+### What's actually next
+
+Same as before — opportunistic. Remaining candidates: lyrics inline, per-message timestamps, listening history tool, mkcert, track-love.
+
+Note: the sleep-timer's "current pending timer" isn't visible in the UI right now — no chip showing "sleeps in 27m" or similar. If real usage surfaces that as friction (setting a 60m timer then forgetting whether it fired), a small server endpoint `GET /api/sleep-timer` returning `{minutes_remaining: u32}` plus a client-side polling display is ~1h of work. Deferred — see if it actually comes up.

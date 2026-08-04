@@ -877,6 +877,21 @@ fn play_message_for(s: &Suggestion) -> String {
     }
 }
 
+/// Compose a "Play something similar to X" chat turn for a Suggestion. The
+/// agent picks up the phrasing and typically uses `play_music` with
+/// `action='radio'` on Roon (which seeds Roon Radio from the track/album).
+fn similar_message_for(s: &Suggestion) -> String {
+    match (&s.artist, &s.album) {
+        (Some(a), _) if !a.is_empty() => {
+            format!("Play something similar to \"{}\" by {}", s.title, a)
+        }
+        (_, Some(al)) if !al.is_empty() => {
+            format!("Play something similar to \"{}\" from {}", s.title, al)
+        }
+        _ => format!("Play something similar to \"{}\"", s.title),
+    }
+}
+
 /// Dispatch a transport command to the right adapter endpoint based on zone
 /// prefix. Used by the now-playing banner buttons. Routes Roon zones to
 /// `/roon/control` and UPnP zones to `/upnp/control`. Errors are logged but
@@ -2409,6 +2424,7 @@ pub fn ConversationalAi() -> Element {
                                                         {
                                                             let sug = sug.clone();
                                                             let play_msg = play_message_for(&sug);
+                                                            let similar_msg = similar_message_for(&sug);
                                                             let label = match &sug.artist {
                                                                 Some(a) if !a.is_empty() => format!("{} — {}", sug.title, a),
                                                                 _ => sug.title.clone(),
@@ -2422,6 +2438,13 @@ pub fn ConversationalAi() -> Element {
                                                                         disabled: is_loading,
                                                                         onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
                                                                         "▶ Play"
+                                                                    }
+                                                                    button {
+                                                                        class: "btn btn-outline px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                        disabled: is_loading,
+                                                                        title: "Play something similar (Roon Radio)",
+                                                                        onclick: move |_| do_send_text(similar_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                        "✨"
                                                                     }
                                                                     span { class: "truncate", "{label}" }
                                                                 }
@@ -2465,6 +2488,13 @@ pub fn ConversationalAi() -> Element {
                                                                         } else {
                                                                             format!("Play \"{}\" from \"{}\" by {}", track, album, artist)
                                                                         };
+                                                                        // Similar seeds from the track (more granular than
+                                                                        // the album). AI typically picks action='radio'.
+                                                                        let similar_msg = if artist.is_empty() {
+                                                                            format!("Play something similar to \"{}\" from \"{}\"", track, album)
+                                                                        } else {
+                                                                            format!("Play something similar to \"{}\" by {}", track, artist)
+                                                                        };
                                                                         let label = format!("{}. {}", i + 1, track);
                                                                         let is_loading = *loading.read();
                                                                         rsx! {
@@ -2475,6 +2505,13 @@ pub fn ConversationalAi() -> Element {
                                                                                     disabled: is_loading,
                                                                                     onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
                                                                                     "▶"
+                                                                                }
+                                                                                button {
+                                                                                    class: "btn btn-outline px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                                    disabled: is_loading,
+                                                                                    title: "Play something similar (Roon Radio)",
+                                                                                    onclick: move |_| do_send_text(similar_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                                    "✨"
                                                                                 }
                                                                                 span { class: "truncate", "{label}" }
                                                                             }
@@ -2511,6 +2548,12 @@ pub fn ConversationalAi() -> Element {
                                                                             "Play \"{}\" by {}",
                                                                             album, artist
                                                                         );
+                                                                        // Similar seeds from the album, per the pattern
+                                                                        // established with the album-tracks card.
+                                                                        let similar_msg = format!(
+                                                                            "Play something similar to \"{}\" by {}",
+                                                                            album, artist
+                                                                        );
                                                                         let is_loading = *loading.read();
                                                                         rsx! {
                                                                             div {
@@ -2520,6 +2563,13 @@ pub fn ConversationalAi() -> Element {
                                                                                     disabled: is_loading,
                                                                                     onclick: move |_| do_send_text(play_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
                                                                                     "▶"
+                                                                                }
+                                                                                button {
+                                                                                    class: "btn btn-outline px-2 py-0.5 text-xs disabled:opacity-50",
+                                                                                    disabled: is_loading,
+                                                                                    title: "Play something similar (Roon Radio)",
+                                                                                    onclick: move |_| do_send_text(similar_msg.clone(), messages, loading, selected_zone, speech, current_track, recent_tracks),
+                                                                                    "✨"
                                                                                 }
                                                                                 span { class: "truncate", "{album}" }
                                                                             }
@@ -2583,6 +2633,64 @@ pub fn ConversationalAi() -> Element {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // Sleep-timer preset row — one tap submits a canned prompt
+                    // for a delayed pause. The agent picks up the phrasing and
+                    // calls set_sleep_timer with the appropriate minutes value.
+                    // The trailing "Cancel" preset sends minutes=0.
+                    {
+                        let busy = *loading.read() || *listening.read();
+                        const SLEEP_PRESETS: &[(&str, &str)] = &[
+                            ("30m", "Stop the music in 30 minutes"),
+                            ("60m", "Stop the music in 60 minutes"),
+                            ("90m", "Stop the music in 90 minutes"),
+                            ("2h",  "Stop the music in 2 hours"),
+                        ];
+                        rsx! {
+                            div { class: "flex flex-wrap items-center gap-2 mt-2",
+                                span { class: "text-xs text-muted", "💤 Sleep in:" }
+                                for (label, prompt) in SLEEP_PRESETS.iter() {
+                                    {
+                                        let prompt_owned = prompt.to_string();
+                                        let label_owned = label.to_string();
+                                        rsx! {
+                                            button {
+                                                key: "{label}",
+                                                class: "px-2.5 py-1 rounded-full text-xs border border-border bg-muted/20 hover:bg-muted disabled:opacity-50 transition-colors",
+                                                title: "{prompt}",
+                                                disabled: busy,
+                                                onclick: move |_| do_send_text(
+                                                    prompt_owned.clone(),
+                                                    messages,
+                                                    loading,
+                                                    selected_zone,
+                                                    speech,
+                                                    current_track,
+                                                    recent_tracks,
+                                                ),
+                                                "{label_owned}"
+                                            }
+                                        }
+                                    }
+                                }
+                                button {
+                                    class: "px-2.5 py-1 rounded-full text-xs border border-border text-muted hover:bg-muted disabled:opacity-50 transition-colors",
+                                    title: "Cancel any pending sleep timer",
+                                    disabled: busy,
+                                    onclick: move |_| do_send_text(
+                                        "Cancel the sleep timer".to_string(),
+                                        messages,
+                                        loading,
+                                        selected_zone,
+                                        speech,
+                                        current_track,
+                                        recent_tracks,
+                                    ),
+                                    "✕"
                                 }
                             }
                         }

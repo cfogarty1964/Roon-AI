@@ -19,7 +19,7 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
@@ -43,6 +43,11 @@ pub struct AppState {
     pub anthropic_api_key: Option<String>,
     /// OpenAI API key for cloud TTS (None = TTS endpoint returns 503)
     pub openai_api_key: Option<String>,
+    /// Handle to a pending sleep-timer task, if any. `set_sleep_timer` tool
+    /// aborts the previous handle before spawning a new one, so at most one
+    /// timer is ever pending. Set to `None` when no timer is scheduled or
+    /// when the fire-time arrived and the pause was executed.
+    pub sleep_timer: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl AppState {
@@ -68,6 +73,7 @@ impl AppState {
             sse_connections: Arc::new(AtomicUsize::new(0)),
             anthropic_api_key: None,
             openai_api_key: None,
+            sleep_timer: Arc::new(Mutex::new(None)),
         }
     }
 

@@ -465,6 +465,24 @@ fn tools() -> Vec<Value> {
                 "required": ["zone_id", "action"]
             }
         }),
+        json!({
+            "name": "set_sleep_timer",
+            "description": "Schedule a pause on a zone after N minutes, or cancel any pending sleep timer. Use when the user says 'stop the music in 30 minutes', 'pause after 15', 'wake me at midnight', 'cancel the sleep timer', etc. There is at most one pending timer at a time — setting a new one replaces the old.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "minutes": {
+                        "type": "number",
+                        "description": "Minutes until pause fires. Use 0 to cancel any pending timer."
+                    },
+                    "zone_id": {
+                        "type": "string",
+                        "description": "Zone ID to pause when the timer fires (ignored when minutes=0). Get from list_zones or use the pre-selected zone."
+                    }
+                },
+                "required": ["minutes"]
+            }
+        }),
     ]
 }
 
@@ -908,6 +926,66 @@ async fn execute_tool(name: &str, input: &Value, state: &AppState) -> String {
                     }
                 }
             }
+        }
+
+        "set_sleep_timer" => {
+            let minutes = input["minutes"].as_f64().unwrap_or(0.0);
+            let zone_id = input["zone_id"].as_str().unwrap_or("").to_string();
+
+            // Abort any pending timer first — we only keep one at a time.
+            {
+                let mut slot = match state.sleep_timer.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                if let Some(existing) = slot.take() {
+                    existing.abort();
+                }
+            }
+
+            if minutes <= 0.0 {
+                return "Sleep timer cancelled.".to_string();
+            }
+            if zone_id.is_empty() {
+                return "Sleep timer needs a zone_id (call list_zones to discover one).".to_string();
+            }
+
+            // Cap at ~24h so a fat-fingered "999999" doesn't stick a task
+            // in the runtime forever.
+            let minutes_capped = minutes.min(60.0 * 24.0);
+            let duration = std::time::Duration::from_secs_f64(minutes_capped * 60.0);
+            let roon = state.roon.clone();
+            let slot_arc = state.sleep_timer.clone();
+            let zone_for_log = zone_id.clone();
+
+            let handle = tokio::spawn(async move {
+                tokio::time::sleep(duration).await;
+                if let Err(e) = roon.control(&zone_id, "pause").await {
+                    tracing::warn!("sleep_timer: pause failed on {}: {}", zone_id, e);
+                } else {
+                    tracing::info!("sleep_timer: paused {} after {} min", zone_id, minutes_capped);
+                }
+                // Clear our own slot on natural completion so subsequent
+                // set_sleep_timer(0) doesn't try to abort a finished task.
+                if let Ok(mut slot) = slot_arc.lock() {
+                    *slot = None;
+                }
+            });
+
+            {
+                let mut slot = match state.sleep_timer.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                *slot = Some(handle);
+            }
+
+            format!(
+                "Sleep timer set: {} will pause in {:.0} minute{}.",
+                zone_for_log,
+                minutes_capped,
+                if minutes_capped == 1.0 { "" } else { "s" }
+            )
         }
 
         unknown => format!("Unknown tool: {}", unknown),
