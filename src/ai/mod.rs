@@ -466,6 +466,35 @@ fn tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "group_zones",
+            "description": "Group two or more Roon zones so they play in sync (whole-home audio). Use when the user says 'play this everywhere', 'add the kitchen', 'group living room and study', etc. Pass ALL zones that should be in the group (including the currently-playing one if it should stay). Discover zone IDs via list_zones. Roon-only — UPnP zones cannot be grouped.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "zone_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Zone IDs to bind into a single group. Must contain at least 2. Include the source zone if it should keep playing."
+                    }
+                },
+                "required": ["zone_ids"]
+            }
+        }),
+        json!({
+            "name": "ungroup_zone",
+            "description": "Remove a zone from its current group so it plays independently again. Use when the user says 'take the kitchen out', 'stop grouping', 'unlink X', etc. Roon-only.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "zone_id": {
+                        "type": "string",
+                        "description": "The zone ID to detach from its group."
+                    }
+                },
+                "required": ["zone_id"]
+            }
+        }),
+        json!({
             "name": "set_sleep_timer",
             "description": "Schedule a pause on a zone after N minutes, or cancel any pending sleep timer. Use when the user says 'stop the music in 30 minutes', 'pause after 15', 'wake me at midnight', 'cancel the sleep timer', etc. There is at most one pending timer at a time — setting a new one replaces the old.",
             "input_schema": {
@@ -925,6 +954,35 @@ async fn execute_tool(name: &str, input: &Value, state: &AppState) -> String {
                         Err(e) => format!("Control error: {}", e),
                     }
                 }
+            }
+        }
+
+        "group_zones" => {
+            let zone_ids: Vec<String> = input["zone_ids"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if zone_ids.len() < 2 {
+                return "group_zones needs at least 2 zone_ids.".to_string();
+            }
+            match state.roon.group_zones(&zone_ids).await {
+                Ok(msg) => msg,
+                Err(e) => format!("Group error: {}", e),
+            }
+        }
+
+        "ungroup_zone" => {
+            let zone_id = input["zone_id"].as_str().unwrap_or("");
+            if zone_id.is_empty() {
+                return "ungroup_zone needs a zone_id.".to_string();
+            }
+            match state.roon.ungroup_zone(zone_id).await {
+                Ok(msg) => msg,
+                Err(e) => format!("Ungroup error: {}", e),
             }
         }
 

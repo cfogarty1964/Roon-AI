@@ -4971,3 +4971,127 @@ Binary at [target/release/roon-ai.exe](target/release/roon-ai.exe) is **83.9 MB*
 Same as before — opportunistic. Remaining candidates: lyrics inline, per-message timestamps, listening history tool, mkcert, track-love.
 
 Note: the sleep-timer's "current pending timer" isn't visible in the UI right now — no chip showing "sleeps in 27m" or similar. If real usage surfaces that as friction (setting a 60m timer then forgetting whether it fired), a small server endpoint `GET /api/sleep-timer` returning `{minutes_remaining: u32}` plus a client-side polling display is ~1h of work. Deferred — see if it actually comes up.
+
+---
+
+## Enhancement Candidates (fresh, ranked by likely daily-use impact)
+
+Fresh brainstorm after 151846e landed. Ranked roughly by "how often would you notice this" × "cost to build". These are additive to the existing parked list (lyrics inline, per-message timestamps, listening history tool, mkcert, track-love, sleep-timer countdown chip).
+
+### 1. TTS ducking / volume-attenuate during speak [~2h]
+
+**Problem**: when the AI speaks while music is playing, the reply can be hard to make out over the music. Right now user can pause manually or hit ⏹ TTS, but neither is ideal.
+
+**Solution**: while `speaking == true`, temporarily attenuate the current-zone volume by e.g. 50% (or a user-set duck-depth in Settings). Restore on speech complete. Server-side: two Roon volume writes bracketing the TTS session.
+
+**Why it matters**: daily-use polish. Removes a real friction the ⏹ button only masks.
+
+**Risk**: if TTS fails to signal completion, volume stays ducked. Need a fallback restore after a timeout.
+
+### 2. Multi-zone grouping via chat [~half day]
+
+**Problem**: Roon supports zone grouping (play the same thing across kitchen + living room + bedroom), but the AI currently only speaks to one zone at a time.
+
+**Solution**: new tool `group_zones([zone_ids])` and `ungroup_zone(zone_id)`. AI picks up phrasing like "play this everywhere", "add the kitchen", "just leave it on the living room". Roon's browse API exposes group/ungroup as actions.
+
+**Why it matters**: unlocks a whole category of natural-language commands you can't do today. Feels like a genuine capability gain, not just polish.
+
+**Risk**: Roon zone grouping has quirks — a zone in a group has a different id than solo. The AI's zone_id resolution will need care.
+
+### 3. Follow-up suggestion chips after each reply [~2h]
+
+**Problem**: common follow-ups ("skip this", "more like this", "tell me about the artist") all require typing or speaking. Even with STT, one-tap chips would be faster and reduce cognitive load.
+
+**Solution**: after each AI reply, render 2-3 context-aware chips below the bubble. Chip text is derived heuristically from what the AI just did (e.g. if it played a track: "▶ Skip / ✨ Similar / ℹ️ Artist info"; if it explained an album: "▶ Play the album / 🎤 More by this artist"). Each chip submits as a new chat turn. No sentinel needed — pure client-side derivation from `actions` + `album_tracks`/`artist_card` presence.
+
+**Why it matters**: the "what now?" moment after a rich reply is where users drop out. Chips make the next action visible and instant.
+
+**Risk**: if the heuristics feel off, chips clutter. Start with 2 conservative chips and iterate.
+
+### 4. Conversation search in sidebar [~1.5h]
+
+**Problem**: as history grows, finding "that one conversation about Steely Dan a week ago" via scroll gets slow. No search today.
+
+**Solution**: single input above the conversation list; substring-matches title AND message content (fetched from localStorage on demand). Debounced 150ms. Rows filter live; clearing input restores full list.
+
+**Why it matters**: linear-scaling friction — the more you use the app, the more this pays off.
+
+**Risk**: message content lives in per-conversation localStorage keys. Searching all of them is a burst of reads on each keystroke — the debounce handles it, but O(n) messages × O(m) chats. Not a problem at your scale but worth noting.
+
+### 5. Sleep-timer countdown chip [~1h]
+
+**Problem** (surfaced already in the previous section): after setting a sleep timer, there's no visible confirmation that it's pending or how long remains. Easy to lose track.
+
+**Solution**: `GET /api/sleep-timer` returns `{minutes_remaining: u32, zone_id: String}` or `null`. Client polls every 30 s while any pending timer is expected. When present, render a chip in the sleep-preset row: "💤 sleeps in 27m ✕".
+
+**Why it matters**: closes the loop on the feature that just shipped. Small and self-contained.
+
+**Risk**: minimal — polling is cheap, and the server-side state is already there.
+
+### Ranking summary
+
+| # | Item | Effort | Daily-use impact |
+|---|---|---|---|
+| 1 | TTS ducking | ~2h | High — every voiced reply while music plays |
+| 2 | Multi-zone grouping | ~half day | High for multi-zone homes, N/A for single-zone |
+| 3 | Follow-up chips | ~2h | Medium — reduces friction on every rich reply |
+| 4 | Conversation search | ~1.5h | Grows with usage |
+| 5 | Sleep-timer chip | ~1h | Occasional, but closes a loop |
+
+**My pick if forced to one**: #1 (ducking) — highest ratio of "you'd notice this every session" to "cost to build". #2 is the bigger capability gain but only matters if you actually run multi-zone.
+
+Real-usage friction is still the strongest signal though. Wait a session or two before committing to a specific one — the answer may surface itself.
+
+---
+
+## Recent Work (2026-08-05) — #2 multi-zone grouping + two new skins
+
+User picked #2 from the enhancement candidates. Also asked about skins, which turned out to be already implemented but under-discovered — added two more palettes to bring the picker to 6.
+
+### Multi-zone grouping ✅
+
+- **`RoonAdapter::group_zones(&[String])`** and **`RoonAdapter::ungroup_zone(&str)`** in [src/adapters/roon.rs](src/adapters/roon.rs). Both take zone IDs and resolve each to its first `output_id` before calling the vendor `Transport::{group_outputs, ungroup_outputs}` (Roon groups at the output level, but "group zones X and Y" is the natural user verb). Returns human-readable status ("Grouped: Kitchen + Living Room").
+- **Two AI tools** in [src/ai/mod.rs](src/ai/mod.rs): `group_zones(zone_ids: array)` and `ungroup_zone(zone_id: string)`. Tool descriptions explicitly cover phrasings like "play this everywhere", "add the kitchen", "take the study out". Roon-only — UPnP zones can't be grouped, and the description says so.
+- **Guard rails**: `group_zones` refuses lists shorter than 2; both surface graceful error messages if a zone isn't found or has no outputs.
+
+Not tested in real usage yet — the code is in the new binary but the user hasn't triggered a group command post-build. Should just work; if not, first suspect is the `strip_roon_prefix` behavior for zones the AI passes with the `roon:` prefix.
+
+### Skins ✅ (existed already + 2 new palettes)
+
+Interesting discovery mid-implementation: skins were already fully implemented in [src/app/theme.rs](src/app/theme.rs) with System / Light / Dark / OLED options, localStorage persistence (`hifi-theme` key), and a picker in the Settings page. Just under-discovered.
+
+Added two more palettes to give the picker real variety:
+
+- **Sepia** — warm cream backgrounds (#f4ecd8) with dark brown text (#5b4636). Light-family. Reduces blue light — nice for evening reading. Feels appropriate for a hi-fi living room.
+- **Midnight** — deep navy backgrounds (#0b1220 → #3c4c7a) with cool-white text. Dark-family, warmer than the default cold-gray Dark. Feels less clinical.
+
+Both are pure CSS variable overrides in [public/dx-components-theme.css](public/dx-components-theme.css), matching the existing pattern (`:root.theme-oled` etc). No new DOM plumbing needed — the existing `apply_theme_to_dom` swap logic was updated to iterate a class list (was hard-coded `remove_3` before) so future palette additions don't require touching the swap function.
+
+Total theme options now: **System, Light, Dark, OLED, Sepia, Midnight** (6). Grid in Settings adjusted from 4-col to 3-col to accommodate.
+
+### Files modified (this pass)
+
+- `src/adapters/roon.rs` — `group_zones` + `ungroup_zone` methods (~70 lines).
+- `src/ai/mod.rs` — two new tool definitions (~30 lines JSON) + two execute_tool branches (~25 lines).
+- `src/app/theme.rs` — added `Sepia` + `Midnight` enum variants; refactored `apply_theme_to_dom` to iterate the theme-class list.
+- `src/app/pages/settings.rs` — picker loops over all 6 themes; grid switched to 3 cols; description text extended for the new palettes.
+- `public/dx-components-theme.css` — two new `:root.theme-*` blocks with full color-variable overrides.
+
+### Binary status
+
+Rebuilt cleanly: **85.3 MB** (up from 82.8 MB, from the grouping code + skin CSS payload). Not launched yet — waiting for user to say when to relaunch (previously running instance PID 93916 was quit before rebuild).
+
+### Enhancement candidates — updated
+
+From the 2026-05 list:
+- ~~#2 Multi-zone grouping~~ — ✅ shipped today.
+- **#1 TTS ducking during speak** — still parked. Highest daily-use impact of the remaining items.
+- **#3 Follow-up suggestion chips** — still parked.
+- **#4 Conversation search in sidebar** — still parked.
+- **#5 Sleep-timer countdown chip** — still parked.
+
+Plus the older opportunistic list is unchanged (lyrics inline, per-message timestamps, listening history tool, mkcert, track-love).
+
+### What's actually next
+
+Nothing pending. Real-usage friction is still the strongest signal. If nothing surfaces from a couple days of using #2 + skins, #1 (TTS ducking) is the natural next pick from a "you'd notice every session" standpoint.

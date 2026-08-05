@@ -397,6 +397,80 @@ impl RoonAdapter {
         Ok(())
     }
 
+    /// Group two or more Roon outputs so they play in sync (whole-home audio).
+    /// Takes zone IDs and resolves each to its FIRST output for the group call
+    /// — Roon groups at the output level, but from the user's perspective
+    /// "group these zones" is the natural verb.
+    pub async fn group_zones(&self, zone_ids: &[String]) -> Result<String> {
+        if zone_ids.len() < 2 {
+            return Err(anyhow::anyhow!("Need at least 2 zones to group"));
+        }
+
+        // Resolve each zone to its first output_id. Grouping requires output
+        // IDs, not zone IDs — a zone can have multiple outputs but one is
+        // enough to bind the whole zone into the group.
+        let mut output_ids: Vec<String> = Vec::with_capacity(zone_ids.len());
+        let mut display_names: Vec<String> = Vec::with_capacity(zone_ids.len());
+        {
+            let state = self.state.read().await;
+            let zones = &state.zones;
+            for zid in zone_ids {
+                let bare = strip_roon_prefix(zid);
+                let zone = zones
+                    .get(bare)
+                    .ok_or_else(|| anyhow::anyhow!("Zone not found: {}", zid))?;
+                let output = zone
+                    .outputs
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("Zone {} has no outputs", zid))?;
+                output_ids.push(output.output_id.clone());
+                display_names.push(zone.display_name.clone());
+            }
+        }
+
+        let transport = {
+            let state = self.state.read().await;
+            state
+                .transport
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Not connected to Roon"))?
+        };
+
+        let output_refs: Vec<&str> = output_ids.iter().map(|s| s.as_str()).collect();
+        transport.group_outputs(output_refs).await;
+        Ok(format!("Grouped: {}", display_names.join(" + ")))
+    }
+
+    /// Ungroup a Roon output (removes it from its current group). Takes a
+    /// zone ID and resolves to its first output_id.
+    pub async fn ungroup_zone(&self, zone_id: &str) -> Result<String> {
+        let bare = strip_roon_prefix(zone_id);
+
+        let (output_id, display_name) = {
+            let state = self.state.read().await;
+            let zone = state
+                .zones
+                .get(bare)
+                .ok_or_else(|| anyhow::anyhow!("Zone not found: {}", zone_id))?;
+            let output = zone
+                .outputs
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Zone {} has no outputs", zone_id))?;
+            (output.output_id.clone(), zone.display_name.clone())
+        };
+
+        let transport = {
+            let state = self.state.read().await;
+            state
+                .transport
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Not connected to Roon"))?
+        };
+
+        transport.ungroup_outputs(vec![output_id.as_str()]).await;
+        Ok(format!("Ungrouped: {}", display_name))
+    }
+
     /// Change volume
     ///
     /// SAFETY CRITICAL: For absolute volume, we must clamp to the output's actual

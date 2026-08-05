@@ -330,8 +330,15 @@ pub fn Settings() -> Element {
                 }
 
                 div { class: "card p-6",
-                    div { class: "grid grid-cols-2 sm:grid-cols-4 gap-4",
-                        for theme in [Theme::System, Theme::Light, Theme::Dark, Theme::Oled] {
+                    div { class: "grid grid-cols-2 sm:grid-cols-3 gap-4",
+                        for theme in [
+                            Theme::System,
+                            Theme::Light,
+                            Theme::Dark,
+                            Theme::Oled,
+                            Theme::Sepia,
+                            Theme::Midnight,
+                        ] {
                             button {
                                 class: if theme_ctx.get() == theme { "btn-primary py-3" } else { "btn-outline py-3" },
                                 onclick: move |_| theme_ctx.set(theme),
@@ -345,6 +352,8 @@ pub fn Settings() -> Element {
                             Theme::Light => "Light theme for bright environments.",
                             Theme::Dark => "Dark theme for low-light environments.",
                             Theme::Oled => "Pure black theme for AMOLED displays.",
+                            Theme::Sepia => "Warm cream tones — easy on the eyes in the evening.",
+                            Theme::Midnight => "Deep navy dark theme — warmer than the default Dark.",
                         }
                     }
                 }

@@ -12,6 +12,8 @@ pub enum Theme {
     Light,
     Dark,
     Oled,
+    Sepia,
+    Midnight,
 }
 
 impl Theme {
@@ -21,6 +23,8 @@ impl Theme {
             Theme::Light => "light",
             Theme::Dark => "dark",
             Theme::Oled => "oled",
+            Theme::Sepia => "sepia",
+            Theme::Midnight => "midnight",
         }
     }
 
@@ -29,6 +33,8 @@ impl Theme {
             "light" => Theme::Light,
             "dark" => Theme::Dark,
             "oled" => Theme::Oled,
+            "sepia" => Theme::Sepia,
+            "midnight" => Theme::Midnight,
             _ => Theme::System,
         }
     }
@@ -39,6 +45,8 @@ impl Theme {
             Theme::Light => "Light",
             Theme::Dark => "Dark",
             Theme::Oled => "OLED Black",
+            Theme::Sepia => "Sepia",
+            Theme::Midnight => "Midnight",
         }
     }
 
@@ -49,6 +57,8 @@ impl Theme {
             Theme::Light => "theme-light",
             Theme::Dark => "theme-dark",
             Theme::Oled => "theme-oled",
+            Theme::Sepia => "theme-sepia",
+            Theme::Midnight => "theme-midnight",
         }
     }
 }
@@ -131,10 +141,18 @@ fn apply_theme_to_dom(theme: Theme) {
     if let Some(window) = web_sys::window() {
         if let Some(document) = window.document() {
             if let Some(root) = document.document_element() {
-                // Remove all theme classes
-                let _ = root
-                    .class_list()
-                    .remove_3("theme-light", "theme-dark", "theme-oled");
+                // Remove all known theme classes (individually so this stays
+                // correct as new themes are added without needing a wider
+                // remove_N overload).
+                for cls in &[
+                    "theme-light",
+                    "theme-dark",
+                    "theme-oled",
+                    "theme-sepia",
+                    "theme-midnight",
+                ] {
+                    let _ = root.class_list().remove_1(cls);
+                }
 
                 // Add the selected theme class (if not system)
                 let class = theme.css_class();
