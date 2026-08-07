@@ -89,7 +89,7 @@ axum = { version = "0.8", features = ["macros"], optional = true }
 # Used to serve over HTTPS with a self-signed cert so the browser
 # microphone API works from non-localhost origins (mic requires a
 # secure context: HTTPS or localhost).
-axum-server = { version = "0.7", features = ["tls-rustls"], optional = true }
+axum-server = { version = "0.8", features = ["tls-rustls"], optional = true }
 # Direct rustls dep so we can install a CryptoProvider at startup.
 # Without this rustls 0.23+ panics with "no process-level CryptoProvider
 # available" when both aws-lc-rs and ring end up in the dep tree (which
