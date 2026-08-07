@@ -39,7 +39,7 @@ web = ["dioxus/web"]
 
 [dependencies]
 # Dioxus UI framework (SSR + client hydration + router)
-dioxus = { version = "0.7.3", features = ["fullstack", "router"] }
+dioxus = { version = "0.7.5", features = ["fullstack", "router"] }
 
 # Serialization (shared)
 serde = { version = "1", features = ["derive"] }
